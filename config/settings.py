@@ -126,3 +126,13 @@ AI_PROVIDER = env(
     "AI_PROVIDER",
     default="mock",
 )
+
+GEMINI_API_KEY = env(
+    "GEMINI_API_KEY",
+    default="",
+)
+
+GEMINI_MODEL = env(
+    "GEMINI_MODEL",
+    default="gemini-3.1-flash-lite",
+)   
