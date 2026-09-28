@@ -1,20 +1,27 @@
-import uuid
-
 from rest_framework import status
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Technician, WhatsAppMessage
-from .serializers import IncomingTextMessageSerializer
+from incidents.models import Technician, WhatsAppMessage
+from incidents.serializers import IncomingTextMessageSerializer
+from incidents.services.incident_processor import IncidentProcessor
 
 
 class IncomingTextMessageTestView(APIView):
+    permission_classes = [AllowAny]
+
     def post(self, request):
-        serializer = IncomingTextMessageSerializer(data=request.data)
+        serializer = IncomingTextMessageSerializer(
+            data=request.data,
+        )
         serializer.is_valid(raise_exception=True)
 
         phone_number = serializer.validated_data["phone_number"]
         text = serializer.validated_data["text"]
+        external_message_id = serializer.validated_data[
+            "external_message_id"
+        ]
 
         technician = Technician.objects.filter(
             whatsapp_number=phone_number,
@@ -32,21 +39,14 @@ class IncomingTextMessageTestView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        external_message_id = serializer.validated_data.get(
-            "external_message_id"
-        )
-
-        if not external_message_id:
-            external_message_id = f"test-{uuid.uuid4()}"
-
         existing_message = WhatsAppMessage.objects.filter(
-            external_message_id=external_message_id
+            external_message_id=external_message_id,
         ).first()
 
         if existing_message is not None:
             return Response(
                 {
-                    "detail": "El mensaje ya había sido recibido.",
+                    "message": "El mensaje ya había sido recibido.",
                     "duplicate": True,
                     "message_id": existing_message.pk,
                 },
@@ -60,22 +60,38 @@ class IncomingTextMessageTestView(APIView):
             direction=WhatsAppMessage.Direction.INBOUND,
             message_type=WhatsAppMessage.MessageType.TEXT,
             content=text,
-            raw_payload=serializer.validated_data,
+            raw_payload=request.data,
             status=WhatsAppMessage.Status.RECEIVED,
         )
 
+        try:
+            processing_result = IncidentProcessor().process(message)
+
+        except Exception as error:
+            message.status = WhatsAppMessage.Status.FAILED
+            message.error_message = str(error)
+            message.save(
+                update_fields=[
+                    "status",
+                    "error_message",
+                ]
+            )
+
+            return Response(
+                {
+                    "detail": "No fue posible procesar el mensaje.",
+                    "message_id": message.pk,
+                    "error": str(error),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
         return Response(
             {
-                "detail": "Mensaje recibido y almacenado correctamente.",
+                "message": "Mensaje recibido y procesado.",
                 "duplicate": False,
-                "message": {
-                    "id": message.pk,
-                    "external_message_id": message.external_message_id,
-                    "technician": technician.full_name,
-                    "phone_number": message.phone_number,
-                    "content": message.content,
-                    "status": message.status,
-                },
+                "message_id": message.pk,
+                "processing": processing_result,
             },
             status=status.HTTP_201_CREATED,
         )
