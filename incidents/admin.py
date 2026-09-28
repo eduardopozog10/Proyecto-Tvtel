@@ -42,6 +42,7 @@ class TechnicianAdmin(admin.ModelAdmin):
         "updated_at",
     )
     ordering = ("full_name",)
+    list_per_page = 25
     inlines = (TechnicianChannelInline,)
 
 
@@ -70,6 +71,11 @@ class TechnicianChannelAdmin(admin.ModelAdmin):
         "updated_at",
     )
     list_select_related = ("technician",)
+    ordering = (
+        "technician__full_name",
+        "provider",
+    )
+    list_per_page = 25
 
 
 @admin.register(Incident)
@@ -79,6 +85,7 @@ class IncidentAdmin(admin.ModelAdmin):
         "technician",
         "unit",
         "equipment",
+        "failure_type",
         "priority",
         "status",
         "created_at",
@@ -93,6 +100,7 @@ class IncidentAdmin(admin.ModelAdmin):
         "equipment",
         "failure_type",
         "description",
+        "original_message",
         "technician__full_name",
         "technician__whatsapp_number",
         "technician__channels__external_user_id",
@@ -104,8 +112,50 @@ class IncidentAdmin(admin.ModelAdmin):
         "resolved_at",
     )
     list_select_related = ("technician",)
+    ordering = ("-created_at",)
+    date_hierarchy = "created_at"
+    list_per_page = 25
 
-    @admin.display(description="Código")
+    fieldsets = (
+        (
+            "Identificación",
+            {
+                "fields": (
+                    "incident_code",
+                    "technician",
+                    "status",
+                    "priority",
+                )
+            },
+        ),
+        (
+            "Información del incidente",
+            {
+                "fields": (
+                    "unit",
+                    "equipment",
+                    "failure_type",
+                    "description",
+                    "original_message",
+                )
+            },
+        ),
+        (
+            "Fechas",
+            {
+                "fields": (
+                    "created_at",
+                    "updated_at",
+                    "resolved_at",
+                )
+            },
+        ),
+    )
+
+    @admin.display(
+        description="Código",
+        ordering="id",
+    )
     def incident_code(self, obj):
         return obj.code
 
@@ -145,6 +195,9 @@ class ChannelMessageAdmin(admin.ModelAdmin):
         "incident",
         "channel_account",
     )
+    ordering = ("-created_at",)
+    date_hierarchy = "created_at"
+    list_per_page = 50
 
 
 @admin.register(IncidentDraft)
@@ -174,3 +227,6 @@ class IncidentDraftAdmin(admin.ModelAdmin):
         "technician",
         "incident",
     )
+    ordering = ("-updated_at",)
+    date_hierarchy = "updated_at"
+    list_per_page = 25
