@@ -122,6 +122,8 @@ STATIC_URL = "static/"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+
+# Proveedor de inteligencia artificial
 AI_PROVIDER = env(
     "AI_PROVIDER",
     default="mock",
@@ -135,4 +137,11 @@ GEMINI_API_KEY = env(
 GEMINI_MODEL = env(
     "GEMINI_MODEL",
     default="gemini-3.1-flash-lite",
-)   
+)
+
+
+# Integración con Telegram
+TELEGRAM_BOT_TOKEN = env(
+    "TELEGRAM_BOT_TOKEN",
+    default="",
+)
