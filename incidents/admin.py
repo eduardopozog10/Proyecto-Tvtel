@@ -1,6 +1,24 @@
 from django.contrib import admin
 
-from .models import Incident, IncidentDraft, Technician, WhatsAppMessage
+from .models import (
+    ChannelMessage,
+    Incident,
+    IncidentDraft,
+    Technician,
+    TechnicianChannel,
+)
+
+
+class TechnicianChannelInline(admin.TabularInline):
+    model = TechnicianChannel
+    extra = 0
+    fields = (
+        "provider",
+        "external_user_id",
+        "external_chat_id",
+        "username",
+        "is_active",
+    )
 
 
 @admin.register(Technician)
@@ -12,9 +30,46 @@ class TechnicianAdmin(admin.ModelAdmin):
         "created_at",
     )
     list_filter = ("is_active",)
-    search_fields = ("full_name", "whatsapp_number")
-    readonly_fields = ("id", "created_at", "updated_at")
+    search_fields = (
+        "full_name",
+        "whatsapp_number",
+        "channels__external_user_id",
+        "channels__username",
+    )
+    readonly_fields = (
+        "id",
+        "created_at",
+        "updated_at",
+    )
     ordering = ("full_name",)
+    inlines = (TechnicianChannelInline,)
+
+
+@admin.register(TechnicianChannel)
+class TechnicianChannelAdmin(admin.ModelAdmin):
+    list_display = (
+        "technician",
+        "provider",
+        "external_user_id",
+        "external_chat_id",
+        "username",
+        "is_active",
+    )
+    list_filter = (
+        "provider",
+        "is_active",
+    )
+    search_fields = (
+        "technician__full_name",
+        "external_user_id",
+        "external_chat_id",
+        "username",
+    )
+    readonly_fields = (
+        "created_at",
+        "updated_at",
+    )
+    list_select_related = ("technician",)
 
 
 @admin.register(Incident)
@@ -40,6 +95,7 @@ class IncidentAdmin(admin.ModelAdmin):
         "description",
         "technician__full_name",
         "technician__whatsapp_number",
+        "technician__channels__external_user_id",
     )
     readonly_fields = (
         "incident_code",
@@ -47,17 +103,19 @@ class IncidentAdmin(admin.ModelAdmin):
         "updated_at",
         "resolved_at",
     )
+    list_select_related = ("technician",)
 
     @admin.display(description="Código")
     def incident_code(self, obj):
         return obj.code
 
 
-@admin.register(WhatsAppMessage)
-class WhatsAppMessageAdmin(admin.ModelAdmin):
+@admin.register(ChannelMessage)
+class ChannelMessageAdmin(admin.ModelAdmin):
     list_display = (
         "created_at",
-        "phone_number",
+        "provider",
+        "external_sender_id",
         "direction",
         "message_type",
         "status",
@@ -65,6 +123,7 @@ class WhatsAppMessageAdmin(admin.ModelAdmin):
         "incident",
     )
     list_filter = (
+        "provider",
         "direction",
         "message_type",
         "status",
@@ -72,13 +131,19 @@ class WhatsAppMessageAdmin(admin.ModelAdmin):
     )
     search_fields = (
         "external_message_id",
-        "phone_number",
+        "external_sender_id",
+        "external_chat_id",
         "content",
         "technician__full_name",
     )
     readonly_fields = (
         "created_at",
         "processed_at",
+    )
+    list_select_related = (
+        "technician",
+        "incident",
+        "channel_account",
     )
 
 
@@ -98,9 +163,14 @@ class IncidentDraftAdmin(admin.ModelAdmin):
     search_fields = (
         "technician__full_name",
         "technician__whatsapp_number",
+        "technician__channels__external_user_id",
     )
     readonly_fields = (
         "created_at",
         "updated_at",
         "completed_at",
+    )
+    list_select_related = (
+        "technician",
+        "incident",
     )

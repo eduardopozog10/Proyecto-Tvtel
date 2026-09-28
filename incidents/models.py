@@ -16,7 +16,13 @@ class Technician(models.Model):
     whatsapp_number = models.CharField(
         max_length=20,
         unique=True,
+        null=True,
+        blank=True,
         verbose_name="número de WhatsApp",
+        help_text=(
+            "Campo temporal para conservar los datos existentes. "
+            "Las nuevas integraciones usarán canales de mensajería."
+        ),
     )
     is_active = models.BooleanField(
         default=True,
@@ -38,7 +44,69 @@ class Technician(models.Model):
         ordering = ["full_name"]
 
     def __str__(self):
-        return f"{self.full_name} ({self.whatsapp_number})"
+        return self.full_name
+
+
+class TechnicianChannel(models.Model):
+    class Provider(models.TextChoices):
+        TELEGRAM = "telegram", "Telegram"
+        WHATSAPP = "whatsapp", "WhatsApp"
+
+    technician = models.ForeignKey(
+        Technician,
+        on_delete=models.CASCADE,
+        related_name="channels",
+        verbose_name="técnico",
+    )
+    provider = models.CharField(
+        max_length=20,
+        choices=Provider.choices,
+        verbose_name="proveedor",
+    )
+    external_user_id = models.CharField(
+        max_length=255,
+        verbose_name="identificador externo del usuario",
+    )
+    external_chat_id = models.CharField(
+        max_length=255,
+        blank=True,
+        verbose_name="identificador externo del chat",
+    )
+    username = models.CharField(
+        max_length=150,
+        blank=True,
+        verbose_name="nombre de usuario externo",
+    )
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name="activo",
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name="fecha de creación",
+    )
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        verbose_name="última actualización",
+    )
+
+    class Meta:
+        db_table = "technician_channels"
+        verbose_name = "canal de técnico"
+        verbose_name_plural = "canales de técnicos"
+        ordering = ["technician__full_name", "provider"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider", "external_user_id"],
+                name="unique_user_per_messaging_provider",
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.technician.full_name} "
+            f"- {self.get_provider_display()}"
+        )
 
 
 class Incident(models.Model):
@@ -123,7 +191,12 @@ class Incident(models.Model):
         return f"{self.code} - {self.equipment}"
 
 
-class WhatsAppMessage(models.Model):
+class ChannelMessage(models.Model):
+    class Provider(models.TextChoices):
+        TELEGRAM = "telegram", "Telegram"
+        WHATSAPP = "whatsapp", "WhatsApp"
+        TEST = "test", "Prueba"
+
     class Direction(models.TextChoices):
         INBOUND = "inbound", "Recibido"
         OUTBOUND = "outbound", "Enviado"
@@ -144,12 +217,34 @@ class WhatsAppMessage(models.Model):
         READ = "read", "Leído"
         FAILED = "failed", "Fallido"
 
+    provider = models.CharField(
+        max_length=20,
+        choices=Provider.choices,
+        default=Provider.WHATSAPP,
+        verbose_name="proveedor",
+    )
     external_message_id = models.CharField(
         max_length=255,
-        unique=True,
         null=True,
         blank=True,
-        verbose_name="identificador externo",
+        verbose_name="identificador externo del mensaje",
+    )
+    external_sender_id = models.CharField(
+        max_length=255,
+        verbose_name="identificador externo del remitente",
+    )
+    external_chat_id = models.CharField(
+        max_length=255,
+        blank=True,
+        verbose_name="identificador externo del chat",
+    )
+    channel_account = models.ForeignKey(
+        TechnicianChannel,
+        on_delete=models.SET_NULL,
+        related_name="messages",
+        null=True,
+        blank=True,
+        verbose_name="canal del técnico",
     )
     technician = models.ForeignKey(
         Technician,
@@ -174,10 +269,6 @@ class WhatsAppMessage(models.Model):
         null=True,
         blank=True,
         verbose_name="borrador",
-    )
-    phone_number = models.CharField(
-        max_length=20,
-        verbose_name="número de WhatsApp",
     )
     direction = models.CharField(
         max_length=10,
@@ -220,13 +311,26 @@ class WhatsAppMessage(models.Model):
     )
 
     class Meta:
-        db_table = "whatsapp_messages"
-        verbose_name = "mensaje de WhatsApp"
-        verbose_name_plural = "mensajes de WhatsApp"
+        db_table = "channel_messages"
+        verbose_name = "mensaje de canal"
+        verbose_name_plural = "mensajes de canales"
         ordering = ["created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider", "external_message_id"],
+                condition=models.Q(
+                    external_message_id__isnull=False,
+                ),
+                name="unique_message_per_provider",
+            ),
+        ]
 
     def __str__(self):
-        return f"{self.get_direction_display()} - {self.phone_number}"
+        return (
+            f"{self.get_provider_display()} "
+            f"- {self.get_direction_display()} "
+            f"- {self.external_sender_id}"
+        )
 
 
 class IncidentDraft(models.Model):
@@ -244,7 +348,7 @@ class IncidentDraft(models.Model):
         verbose_name="técnico",
     )
     initial_message = models.OneToOneField(
-        WhatsAppMessage,
+        ChannelMessage,
         on_delete=models.SET_NULL,
         related_name="started_draft",
         null=True,

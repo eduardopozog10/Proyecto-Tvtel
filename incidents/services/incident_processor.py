@@ -3,9 +3,9 @@ from django.utils import timezone
 
 from incidents.ai.factory import get_ai_provider
 from incidents.models import (
+    ChannelMessage,
     Incident,
     IncidentDraft,
-    WhatsAppMessage,
 )
 
 
@@ -28,13 +28,13 @@ class IncidentProcessor:
         self.ai_provider = ai_provider or get_ai_provider()
 
     @transaction.atomic
-    def process(self, message: WhatsAppMessage):
+    def process(self, message: ChannelMessage):
         if message.technician is None:
             raise ValueError(
                 "El mensaje debe estar asociado a un técnico."
             )
 
-        message.status = WhatsAppMessage.Status.PROCESSING
+        message.status = ChannelMessage.Status.PROCESSING
         message.save(update_fields=["status"])
 
         draft = (
@@ -133,7 +133,7 @@ class IncidentProcessor:
         message.draft = draft
 
         if missing_fields:
-            message.status = WhatsAppMessage.Status.PROCESSED
+            message.status = ChannelMessage.Status.PROCESSED
             message.processed_at = timezone.now()
             message.save(
                 update_fields=[
@@ -152,6 +152,11 @@ class IncidentProcessor:
                 "extracted_data": extracted_data,
             }
 
+        initial_message_content = ""
+
+        if draft.initial_message is not None:
+            initial_message_content = draft.initial_message.content
+
         incident = Incident.objects.create(
             technician=message.technician,
             unit=extracted_data["unit"],
@@ -160,31 +165,33 @@ class IncidentProcessor:
             description=extracted_data["description"],
             priority=extracted_data["priority"],
             status=Incident.Status.REPORTED,
-            original_message=draft.initial_message.content,
+            original_message=initial_message_content,
         )
 
         draft.incident = incident
         draft.status = IncidentDraft.Status.COMPLETED
         draft.missing_fields = []
         draft.last_question = ""
+        draft.completed_at = timezone.now()
         draft.save(
             update_fields=[
                 "incident",
                 "status",
                 "missing_fields",
                 "last_question",
+                "completed_at",
                 "updated_at",
             ]
         )
 
-        WhatsAppMessage.objects.filter(
+        ChannelMessage.objects.filter(
             draft=draft,
         ).update(
             incident=incident,
         )
 
         message.incident = incident
-        message.status = WhatsAppMessage.Status.PROCESSED
+        message.status = ChannelMessage.Status.PROCESSED
         message.processed_at = timezone.now()
         message.save(
             update_fields=[

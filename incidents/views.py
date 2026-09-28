@@ -3,7 +3,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from incidents.models import Technician, WhatsAppMessage
+from incidents.models import ChannelMessage, TechnicianChannel
 from incidents.serializers import IncomingTextMessageSerializer
 from incidents.services.incident_processor import IncidentProcessor
 
@@ -17,29 +17,42 @@ class IncomingTextMessageTestView(APIView):
         )
         serializer.is_valid(raise_exception=True)
 
-        phone_number = serializer.validated_data["phone_number"]
-        text = serializer.validated_data["text"]
+        provider = serializer.validated_data["provider"]
+        external_user_id = serializer.validated_data[
+            "external_user_id"
+        ]
+        external_chat_id = serializer.validated_data[
+            "external_chat_id"
+        ]
         external_message_id = serializer.validated_data[
             "external_message_id"
         ]
+        text = serializer.validated_data["text"]
 
-        technician = Technician.objects.filter(
-            whatsapp_number=phone_number,
-            is_active=True,
-        ).first()
+        channel_account = (
+            TechnicianChannel.objects.select_related("technician")
+            .filter(
+                provider=provider,
+                external_user_id=external_user_id,
+                is_active=True,
+                technician__is_active=True,
+            )
+            .first()
+        )
 
-        if technician is None:
+        if channel_account is None:
             return Response(
                 {
                     "detail": (
                         "No existe un técnico activo asociado "
-                        "a este número de WhatsApp."
+                        "a este usuario y proveedor."
                     )
                 },
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        existing_message = WhatsAppMessage.objects.filter(
+        existing_message = ChannelMessage.objects.filter(
+            provider=provider,
             external_message_id=external_message_id,
         ).first()
 
@@ -53,22 +66,25 @@ class IncomingTextMessageTestView(APIView):
                 status=status.HTTP_200_OK,
             )
 
-        message = WhatsAppMessage.objects.create(
+        message = ChannelMessage.objects.create(
+            provider=provider,
             external_message_id=external_message_id,
-            technician=technician,
-            phone_number=phone_number,
-            direction=WhatsAppMessage.Direction.INBOUND,
-            message_type=WhatsAppMessage.MessageType.TEXT,
+            external_sender_id=external_user_id,
+            external_chat_id=external_chat_id,
+            channel_account=channel_account,
+            technician=channel_account.technician,
+            direction=ChannelMessage.Direction.INBOUND,
+            message_type=ChannelMessage.MessageType.TEXT,
             content=text,
             raw_payload=request.data,
-            status=WhatsAppMessage.Status.RECEIVED,
+            status=ChannelMessage.Status.RECEIVED,
         )
 
         try:
             processing_result = IncidentProcessor().process(message)
 
         except Exception as error:
-            message.status = WhatsAppMessage.Status.FAILED
+            message.status = ChannelMessage.Status.FAILED
             message.error_message = str(error)
             message.save(
                 update_fields=[
@@ -91,6 +107,7 @@ class IncomingTextMessageTestView(APIView):
                 "message": "Mensaje recibido y procesado.",
                 "duplicate": False,
                 "message_id": message.pk,
+                "provider": provider,
                 "processing": processing_result,
             },
             status=status.HTTP_201_CREATED,
