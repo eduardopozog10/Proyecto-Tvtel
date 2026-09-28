@@ -1,78 +1,226 @@
 # TVTEL Incidentes
 
-Sistema para registrar y gestionar reportes técnicos enviados mediante WhatsApp.
+Guía para configurar y levantar el proyecto localmente.
 
-## Objetivo del MVP
+## Requisitos
 
-El primer MVP permitirá el siguiente flujo:
-
-1. Un técnico envía un reporte de falla por texto mediante WhatsApp.
-2. WhatsApp Cloud API entrega el mensaje al webhook de Django.
-3. La IA extrae la información estructurada del incidente.
-4. El backend valida si faltan datos.
-5. Si faltan datos, el sistema los solicita por WhatsApp.
-6. Cuando la información está completa, el incidente se almacena en PostgreSQL.
-7. El técnico recibe una confirmación por WhatsApp.
-
-## Tecnologías
+Instalar:
 
 - Python 3.13
-- Django 5.2
-- Django REST Framework
 - PostgreSQL 18
-- WhatsApp Cloud API
-- IA para extracción estructurada
-- uv para dependencias y entorno virtual
+- `uv`
+- GitHub Desktop
+- Visual Studio Code
 
-## Configuración local
+Verificar las instalaciones:
 
-Instalar las dependencias:
+```powershell
+python --version
+uv --version
+psql --version
+```
+
+## 1. Descargar o actualizar el proyecto
+
+### Primera vez
+
+Clonar el repositorio mediante GitHub Desktop y abrirlo en Visual Studio Code.
+
+### Si el proyecto ya está descargado
+
+En GitHub Desktop:
+
+1. Pulsar **Fetch origin**.
+2. Pulsar **Pull origin** si existen cambios.
+
+## 2. Instalar las dependencias
+
+Desde la carpeta donde está `manage.py`:
 
 ```powershell
 uv sync
 ```
 
-Crear un archivo `.env` utilizando `.env.example` como referencia.
+## 3. Configurar PostgreSQL
 
-Aplicar las migraciones:
+Cada computador utiliza un puerto diferente:
+
+| Computador | Puerto |
+|---|---:|
+| PC | `5433` |
+| Notebook | `5432` |
+
+Comprobar que PostgreSQL esté iniciado desde **Servicios** de Windows.
+
+### Crear usuario y base de datos
+
+Este paso se realiza solo la primera vez en cada computador.
+
+En el PC:
+
+```powershell
+psql -h localhost -p 5433 -U postgres -d postgres
+```
+
+En el notebook:
+
+```powershell
+psql -h localhost -p 5432 -U postgres -d postgres
+```
+
+Dentro de PostgreSQL:
+
+```sql
+CREATE USER tvtel_app WITH PASSWORD 'TU_CLAVE_LOCAL';
+CREATE DATABASE tvtel_db OWNER tvtel_app;
+```
+
+Salir:
+
+```text
+\q
+```
+
+## 4. Crear el archivo `.env`
+
+El archivo `.env` es local y no se descarga desde GitHub.
+
+Crear una copia de `.env.example`:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Abrir `.env` y completar las variables.
+
+### Configuración del PC
+
+```env
+POSTGRES_DB=tvtel_db
+POSTGRES_USER=tvtel_app
+POSTGRES_PASSWORD=TU_CLAVE_LOCAL
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5433
+```
+
+### Configuración del notebook
+
+```env
+POSTGRES_DB=tvtel_db
+POSTGRES_USER=tvtel_app
+POSTGRES_PASSWORD=TU_CLAVE_LOCAL
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+```
+
+## 5. Generar la clave secreta de Django
+
+Ejecutar:
+
+```powershell
+uv run python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
+```
+
+Copiar el resultado en `.env`:
+
+```env
+DJANGO_SECRET_KEY=CLAVE_GENERADA
+```
+
+No compartir ni subir esta clave a GitHub.
+
+## 6. Configurar la inteligencia artificial
+
+Para usar Gemini:
+
+```env
+AI_PROVIDER=gemini
+GEMINI_API_KEY=TU_CLAVE_DE_GEMINI
+GEMINI_MODEL=gemini-3.1-flash-lite
+```
+
+Para trabajar sin Gemini:
+
+```env
+AI_PROVIDER=mock
+```
+
+Las claves reales deben guardarse solamente en `.env`.
+
+## 7. Aplicar las migraciones
 
 ```powershell
 uv run python manage.py migrate
 ```
 
-Iniciar el servidor:
+Este comando debe ejecutarse después de hacer pull si existen migraciones nuevas.
+
+## 8. Crear un administrador
+
+Solo la primera vez en cada base de datos local:
+
+```powershell
+uv run python manage.py createsuperuser
+```
+
+## 9. Comprobar la configuración
+
+```powershell
+uv run python manage.py check
+```
+
+El resultado esperado es:
+
+```text
+System check identified no issues (0 silenced).
+```
+
+## 10. Levantar el servidor
 
 ```powershell
 uv run python manage.py runserver
 ```
 
-El servidor estará disponible en:
+Direcciones disponibles:
 
-```text
-http://127.0.0.1:8000/
+- Administrador: http://127.0.0.1:8000/admin/
+- API local: http://127.0.0.1:8000/api/
+
+La terminal del servidor debe permanecer abierta. Para ejecutar pruebas se debe utilizar una segunda terminal.
+
+## Pasos habituales para comenzar a trabajar
+
+Cada vez que se cambie de computador:
+
+1. Abrir GitHub Desktop.
+2. Ejecutar **Fetch origin**.
+3. Ejecutar **Pull origin**.
+4. Abrir Visual Studio Code.
+5. Ejecutar:
+
+```powershell
+uv sync
+uv run python manage.py migrate
+uv run python manage.py check
+uv run python manage.py runserver
 ```
 
-## Variables de entorno
+## Pasos para terminar de trabajar
 
-Las contraseñas, tokens y claves privadas deben guardarse únicamente en `.env`.
+1. Revisar los cambios en GitHub Desktop.
+2. Confirmar que `.env` no aparezca.
+3. Crear el commit.
+4. Pulsar **Push origin**.
+5. Realizar el push antes de cambiar de computador.
 
-El archivo `.env` no debe subirse a GitHub. El archivo `.env.example` contiene solamente la estructura necesaria, sin credenciales reales.
+## Importante
 
-## Estado actual
+GitHub sincroniza el código, pero no sincroniza:
 
-- Proyecto Django creado.
-- Django REST Framework instalado.
-- PostgreSQL configurado.
-- Migraciones iniciales aplicadas.
-- Repositorio GitHub configurado.
+- `.env`
+- `.venv`
+- Contraseñas y tokens
+- La base de datos PostgreSQL local
+- Los incidentes creados localmente
 
-## Próximas etapas
-
-1. Crear el módulo de incidentes.
-2. Definir los modelos de datos.
-3. Crear el endpoint de prueba.
-4. Integrar la extracción con IA.
-5. Implementar el webhook de WhatsApp.
-6. Probar el flujo completo del MVP.
-7. Construir el dashboard web.
-8. Agregar soporte para audio e imágenes.
+Cada computador mantiene su propia base de datos de desarrollo.
