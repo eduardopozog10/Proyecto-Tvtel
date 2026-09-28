@@ -32,7 +32,8 @@ class GeminiAIProvider(AIProvider):
             "failure_type": {
                 "type": ["string", "null"],
                 "description": (
-                    "Síntoma o tipo de falla, sin emitir un diagnóstico."
+                    "Síntoma observable reportado por el técnico, "
+                    "sin emitir un diagnóstico."
                 ),
             },
             "description": {
@@ -179,17 +180,39 @@ Reglas obligatorias:
 - No inventes información.
 - No entregues recomendaciones de reparación.
 - No emitas diagnósticos técnicos definitivos.
-- El tipo de falla debe describir solamente el síntoma observado.
+- Extrae solamente información explícita o directamente observable
+  en el mensaje del técnico.
+- El campo failure_type representa el síntoma observable, no la causa
+  técnica del problema.
+- Frases como "no enciende", "no muestra imagen", "sin audio",
+  "pantalla negra", "imagen intermitente", "se reinicia",
+  "no responde", "sin señal" o expresiones equivalentes deben
+  considerarse un failure_type válido.
+- No devuelvas null en failure_type si el mensaje ya describe
+  claramente qué comportamiento anormal presenta el equipo.
+- Puedes resumir el síntoma en una frase breve y objetiva.
+- No conviertas el síntoma en un diagnóstico. Por ejemplo:
+  "no muestra imagen" es válido; "tarjeta de video dañada" no lo es
+  salvo que el técnico lo haya afirmado explícitamente.
 - Conserva los datos anteriores cuando el mensaje actual solo
   responda una pregunta pendiente.
-- Si un dato no está disponible, devuelve null.
+- Si un dato realmente no está disponible, devuelve null.
+- La descripción debe conservar el sentido completo de lo reportado
+  por el técnico.
 - La prioridad debe ser low, medium, high o critical.
 - Usa critical solo ante incendios, humo, riesgo eléctrico,
   peligro para personas o una emergencia explícita.
 - Usa high si el equipo quedó fuera de servicio, no enciende
-  o perdió completamente la señal.
+  o perdió completamente la señal o funcionalidad principal.
 - Usa medium para fallas normales sin riesgo inmediato.
 - Usa low para problemas menores que no impiden operar.
+
+Ejemplos de extracción de failure_type:
+- "La cámara no enciende" -> "No enciende"
+- "La cámara no muestra imagen" -> "No muestra imagen"
+- "La consola quedó sin audio" -> "Sin audio"
+- "El monitor parpadea" -> "Imagen intermitente"
+- "El equipo se reinicia solo" -> "Se reinicia"
 
 Datos anteriores:
 {previous_data_json}

@@ -3,6 +3,9 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from incidents.messaging.telegram_update_handler import (
+    TelegramUpdateHandler,
+)
 from incidents.serializers import IncomingTextMessageSerializer
 from incidents.services.incoming_message_service import (
     ChannelNotAuthorizedError,
@@ -78,3 +81,31 @@ class IncomingTextMessageTestView(APIView):
             },
             status=status.HTTP_201_CREATED,
         )
+
+
+class TelegramWebhookView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        try:
+            result = TelegramUpdateHandler().handle(
+                request.data,
+            )
+        except Exception:
+            return Response(
+                {
+                    "detail": (
+                        "No fue posible procesar la actualización "
+                        "de Telegram."
+                    ),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(
+            {
+                "ok": True,
+                "result": result,
+            },
+            status=status.HTTP_200_OK,
+        )   
