@@ -1,4 +1,5 @@
 import re
+import unicodedata
 
 from .base import AIProvider
 from .schemas import IncidentExtractionResult
@@ -32,7 +33,7 @@ class MockAIProvider(AIProvider):
         previous_data: dict | None = None,
     ) -> IncidentExtractionResult:
         previous_data = previous_data or {}
-        normalized_message = message.lower()
+        normalized_message = self._normalize_text(message)
 
         unit = previous_data.get("unit") or self._extract_unit(message)
         equipment = (
@@ -86,10 +87,21 @@ class MockAIProvider(AIProvider):
             },
         )
 
+    def _normalize_text(self, text: str):
+        normalized_text = unicodedata.normalize("NFD", text.lower())
+
+        return "".join(
+            character
+            for character in normalized_text
+            if unicodedata.category(character) != "Mn"
+        )
+
     def _extract_unit(self, message: str):
+        normalized_message = self._normalize_text(message)
+
         match = re.search(
-            r"\bunidad(?:\s+m[oó]vil)?\s+[a-zA-Z0-9-]+",
-            message,
+            r"\bunidad(?:\s+movil)?\s+[a-zA-Z0-9-]+",
+            normalized_message,
             flags=re.IGNORECASE,
         )
 
@@ -100,14 +112,18 @@ class MockAIProvider(AIProvider):
 
     def _extract_equipment(self, normalized_message: str):
         for equipment_name in self.EQUIPMENT_NAMES:
-            if equipment_name in normalized_message:
+            normalized_equipment = self._normalize_text(equipment_name)
+
+            if normalized_equipment in normalized_message:
                 return equipment_name.capitalize()
 
         return None
 
     def _extract_failure_type(self, normalized_message: str):
         for failure_pattern in self.FAILURE_PATTERNS:
-            if failure_pattern in normalized_message:
+            normalized_failure = self._normalize_text(failure_pattern)
+
+            if normalized_failure in normalized_message:
                 return failure_pattern.capitalize()
 
         return None
@@ -116,7 +132,7 @@ class MockAIProvider(AIProvider):
         critical_words = (
             "incendio",
             "humo",
-            "riesgo eléctrico",
+            "riesgo electrico",
             "emergencia",
         )
 
@@ -125,7 +141,7 @@ class MockAIProvider(AIProvider):
 
         high_words = (
             "no enciende",
-            "sin señal",
+            "sin senal",
             "fuera de servicio",
         )
 
