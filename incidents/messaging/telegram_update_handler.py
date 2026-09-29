@@ -1,7 +1,10 @@
 from django.utils import timezone
 
 from incidents.messaging.factory import get_messaging_provider
-from incidents.models import ChannelMessage
+from incidents.models import ChannelMessage, TechnicianChannel
+from incidents.services.incident_draft_service import (
+    IncidentDraftService,
+)
 from incidents.services.incoming_message_service import (
     ChannelNotAuthorizedError,
     IncomingMessageService,
@@ -15,6 +18,7 @@ class TelegramUpdateHandler:
         self,
         messaging_provider=None,
         incoming_service=None,
+        draft_service=None,
     ):
         self.messaging_provider = (
             messaging_provider
@@ -23,6 +27,10 @@ class TelegramUpdateHandler:
         self.incoming_service = (
             incoming_service
             or IncomingMessageService()
+        )
+        self.draft_service = (
+            draft_service
+            or IncidentDraftService()
         )
 
     def handle(self, update: dict) -> dict:
@@ -66,6 +74,12 @@ class TelegramUpdateHandler:
             return {
                 "action": "welcome_sent",
             }
+
+        if text == "/cancelar":
+            return self._handle_cancel_command(
+                external_user_id=external_user_id,
+                external_chat_id=external_chat_id,
+            )
 
         if not isinstance(text, str) or not text.strip():
             self.messaging_provider.send_text(
@@ -161,6 +175,62 @@ class TelegramUpdateHandler:
             "incident_created": processing_result[
                 "incident_created"
             ],
+        }
+
+    def _handle_cancel_command(
+        self,
+        *,
+        external_user_id: str,
+        external_chat_id: str,
+    ) -> dict:
+        channel_account = (
+            TechnicianChannel.objects.select_related(
+                "technician"
+            )
+            .filter(
+                provider=self.PROVIDER,
+                external_user_id=external_user_id,
+                is_active=True,
+                technician__is_active=True,
+            )
+            .first()
+        )
+
+        if channel_account is None:
+            self.messaging_provider.send_text(
+                external_chat_id,
+                (
+                    "Tu cuenta de Telegram no está autorizada "
+                    "para registrar incidentes."
+                ),
+            )
+
+            return {
+                "action": "unauthorized_user",
+            }
+
+        draft = self.draft_service.cancel_active_draft(
+            technician=channel_account.technician,
+        )
+
+        if draft is None:
+            self.messaging_provider.send_text(
+                external_chat_id,
+                "No tienes ningún reporte pendiente.",
+            )
+
+            return {
+                "action": "no_active_draft",
+            }
+
+        self.messaging_provider.send_text(
+            external_chat_id,
+            "El reporte pendiente fue cancelado.",
+        )
+
+        return {
+            "action": "draft_cancelled",
+            "draft_id": draft.pk,
         }
 
     def _record_sent_reply(
