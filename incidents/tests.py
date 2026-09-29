@@ -1,4 +1,5 @@
 from django.test import TestCase, override_settings
+from django.utils import timezone
 
 from incidents.models import (
     ChannelMessage,
@@ -552,4 +553,203 @@ class IncidentListViewTests(TestCase):
         self.assertEqual(
             results[1]["id"],
             self.high_incident.pk,
-        )  
+        )
+
+
+class IncidentDetailViewTests(TestCase):
+    def setUp(self):
+        self.technician = Technician.objects.create(
+            full_name="Técnico Detalle",
+            is_active=True,
+        )
+
+        self.incident = Incident.objects.create(
+            technician=self.technician,
+            unit="Unidad móvil 50",
+            equipment="Router",
+            failure_type="Sin conexión",
+            description=(
+                "El router de la unidad móvil 50 "
+                "no tiene conexión."
+            ),
+            priority=Incident.Priority.HIGH,
+            status=Incident.Status.REPORTED,
+            original_message=(
+                "El router de la unidad móvil 50 "
+                "no tiene conexión."
+            ),
+        )
+
+    def test_retrieves_incident_detail(self):
+        response = self.client.get(
+            f"/api/v1/incidents/{self.incident.pk}/",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        data = response.json()
+
+        self.assertEqual(
+            data["id"],
+            self.incident.pk,
+        )
+        self.assertEqual(
+            data["code"],
+            self.incident.code,
+        )
+        self.assertEqual(
+            data["technician_name"],
+            "Técnico Detalle",
+        )
+        self.assertEqual(
+            data["unit"],
+            "Unidad móvil 50",
+        )
+        self.assertEqual(
+            data["equipment"],
+            "Router",
+        )
+        self.assertEqual(
+            data["failure_type"],
+            "Sin conexión",
+        )
+
+    def test_returns_404_for_missing_incident(self):
+        response = self.client.get(
+            "/api/v1/incidents/999999/",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            404,
+        )
+
+    def test_updates_incident_status(self):
+        response = self.client.patch(
+            f"/api/v1/incidents/{self.incident.pk}/",
+            data={
+                "status": Incident.Status.IN_PROGRESS,
+            },
+            content_type="application/json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        self.incident.refresh_from_db()
+
+        self.assertEqual(
+            self.incident.status,
+            Incident.Status.IN_PROGRESS,
+        )
+        self.assertIsNone(
+            self.incident.resolved_at,
+        )
+
+        data = response.json()
+
+        self.assertEqual(
+            data["status"],
+            Incident.Status.IN_PROGRESS,
+        )
+        self.assertEqual(
+            data["status_display"],
+            "En progreso",
+        )
+
+    def test_sets_resolved_at_when_incident_is_resolved(self):
+        response = self.client.patch(
+            f"/api/v1/incidents/{self.incident.pk}/",
+            data={
+                "status": Incident.Status.RESOLVED,
+            },
+            content_type="application/json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        self.incident.refresh_from_db()
+
+        self.assertEqual(
+            self.incident.status,
+            Incident.Status.RESOLVED,
+        )
+        self.assertIsNotNone(
+            self.incident.resolved_at,
+        )
+
+        data = response.json()
+
+        self.assertEqual(
+            data["status"],
+            Incident.Status.RESOLVED,
+        )
+        self.assertIsNotNone(
+            data["resolved_at"],
+        )
+
+    def test_clears_resolved_at_when_leaving_resolved_status(self):
+        self.incident.status = Incident.Status.RESOLVED
+        self.incident.resolved_at = timezone.now()
+        self.incident.save(
+            update_fields=[
+                "status",
+                "resolved_at",
+                "updated_at",
+            ]
+        )
+
+        response = self.client.patch(
+            f"/api/v1/incidents/{self.incident.pk}/",
+            data={
+                "status": Incident.Status.UNDER_REVIEW,
+            },
+            content_type="application/json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        self.incident.refresh_from_db()
+
+        self.assertEqual(
+            self.incident.status,
+            Incident.Status.UNDER_REVIEW,
+        )
+        self.assertIsNone(
+            self.incident.resolved_at,
+        )
+
+    def test_rejects_invalid_incident_status(self):
+        response = self.client.patch(
+            f"/api/v1/incidents/{self.incident.pk}/",
+            data={
+                "status": "estado_inventado",
+            },
+            content_type="application/json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            400,
+        )
+
+        self.incident.refresh_from_db()
+
+        self.assertEqual(
+            self.incident.status,
+            Incident.Status.REPORTED,
+        )
+        self.assertIsNone(
+            self.incident.resolved_at,
+        )

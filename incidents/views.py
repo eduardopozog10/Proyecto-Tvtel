@@ -1,4 +1,5 @@
 from django.db.models import Q
+from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -10,6 +11,7 @@ from incidents.messaging.telegram_update_handler import (
 from incidents.models import Incident
 from incidents.serializers import (
     IncidentSerializer,
+    IncidentStatusUpdateSerializer,
     IncomingTextMessageSerializer,
 )
 from incidents.services.incoming_message_service import (
@@ -94,6 +96,51 @@ class IncidentListView(generics.ListAPIView):
             ordering = "-created_at"
 
         return queryset.order_by(ordering)
+
+
+class IncidentDetailView(generics.RetrieveAPIView):
+    permission_classes = [AllowAny]
+    serializer_class = IncidentSerializer
+
+    def get_queryset(self):
+        return Incident.objects.select_related(
+            "technician"
+        )
+
+    def patch(self, request, *args, **kwargs):
+        incident = self.get_object()
+
+        serializer = IncidentStatusUpdateSerializer(
+            data=request.data,
+        )
+        serializer.is_valid(raise_exception=True)
+
+        new_status = serializer.validated_data["status"]
+
+        incident.status = new_status
+
+        if new_status == Incident.Status.RESOLVED:
+            if incident.resolved_at is None:
+                incident.resolved_at = timezone.now()
+        else:
+            incident.resolved_at = None
+
+        incident.save(
+            update_fields=[
+                "status",
+                "resolved_at",
+                "updated_at",
+            ]
+        )
+
+        response_serializer = IncidentSerializer(
+            incident,
+        )
+
+        return Response(
+            response_serializer.data,
+            status=status.HTTP_200_OK,
+        )
 
 
 class IncomingTextMessageTestView(APIView):

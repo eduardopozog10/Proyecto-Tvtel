@@ -100,3 +100,9 @@ class IncidentSerializer(serializers.ModelSerializer):
             "resolved_at",
         )
         read_only_fields = fields
+
+
+class IncidentStatusUpdateSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(
+        choices=Incident.Status.choices,
+    )
