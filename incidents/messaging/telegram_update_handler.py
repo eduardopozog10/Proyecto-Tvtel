@@ -66,8 +66,12 @@ class TelegramUpdateHandler:
                 (
                     "Hola. Soy el asistente de reportes técnicos "
                     "de TVTEL.\n\n"
-                    "Describe la falla indicando la unidad, "
-                    "el equipo y lo ocurrido."
+                    "Para registrar un incidente, describe la falla "
+                    "indicando la unidad, el equipo y lo ocurrido.\n\n"
+                    "Si falta información, te haré una pregunta "
+                    "para completar el reporte.\n\n"
+                    "Si quieres cancelar un reporte pendiente, "
+                    "escribe /cancelar."
                 ),
             )
 
