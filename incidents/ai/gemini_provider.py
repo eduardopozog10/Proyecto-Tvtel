@@ -18,6 +18,24 @@ class GeminiAIProvider(AIProvider):
     RESPONSE_SCHEMA = {
         "type": "object",
         "properties": {
+            "intent": {
+                "type": "string",
+                "enum": [
+                    "incident_report",
+                    "incident_followup",
+                    "conversation",
+                ],
+                "description": (
+                    "Intención principal del mensaje del técnico."
+                ),
+            },
+            "conversation_reply": {
+                "type": ["string", "null"],
+                "description": (
+                    "Respuesta conversacional cuando el mensaje no "
+                    "corresponde a información de un incidente."
+                ),
+            },
             "unit": {
                 "type": ["string", "null"],
                 "description": (
@@ -48,13 +66,23 @@ class GeminiAIProvider(AIProvider):
                     "Prioridad: low, medium, high o critical."
                 ),
             },
+            "clarification_question": {
+                "type": ["string", "null"],
+                "description": (
+                    "Pregunta breve y natural para solicitar el siguiente "
+                    "dato faltante del incidente."
+                ),
+            },
         },
         "required": [
+            "intent",
+            "conversation_reply",
             "unit",
             "equipment",
             "failure_type",
             "description",
             "priority",
+            "clarification_question",
         ],
     }
 
@@ -105,6 +133,27 @@ class GeminiAIProvider(AIProvider):
                 "Gemini devolvió un JSON inválido."
             ) from error
 
+        intent = self._normalize_intent(
+            response_data.get("intent")
+        )
+
+        conversation_reply = self._clean_text(
+            response_data.get("conversation_reply")
+        )
+
+        if intent == "conversation":
+            return IncidentExtractionResult(
+                intent=intent,
+                conversation_reply=conversation_reply,
+                missing_fields=[],
+                clarification_question=None,
+                raw_response={
+                    "provider": "gemini",
+                    "model": self.model,
+                    "data": response_data,
+                },
+            )
+
         unit = (
             self._clean_text(response_data.get("unit"))
             or previous_data.get("unit")
@@ -141,11 +190,23 @@ class GeminiAIProvider(AIProvider):
             if not extracted_data.get(field_name)
         ]
 
-        clarification_question = self._build_question(
-            missing_fields
-        )
+        clarification_question = None
+
+        if missing_fields:
+            clarification_question = self._clean_text(
+                response_data.get("clarification_question")
+            )
+
+            if not clarification_question:
+                clarification_question = (
+                    self._build_fallback_question(
+                        missing_fields
+                    )
+                )
 
         return IncidentExtractionResult(
+            intent=intent,
+            conversation_reply=None,
             unit=unit,
             equipment=equipment,
             failure_type=failure_type,
@@ -170,51 +231,177 @@ class GeminiAIProvider(AIProvider):
             ensure_ascii=False,
         )
 
+        has_previous_data = bool(previous_data)
+
         return f"""
-Eres un sistema de extracción de reportes técnicos para TVTEL.
+Eres el asistente técnico conversacional de TVTEL.
 
-Analiza el mensaje de un técnico y devuelve únicamente los datos
-solicitados por el esquema JSON.
+Tu función principal es conversar de manera natural con técnicos,
+identificar reportes de incidentes, recopilar los datos necesarios
+para registrarlos y responder mensajes generales cuando no se trate
+de una falla.
 
-Reglas obligatorias:
+Debes mantener siempre un tono:
+- Formal.
+- Cordial.
+- Profesional.
+- Claro.
+- Simple.
+- Natural.
+- Breve.
+
+Evita sonar como un bot rígido.
+No repitas siempre las mismas frases.
+Puedes variar tu vocabulario y la estructura de las respuestas,
+manteniendo siempre un lenguaje sencillo y profesional.
+
+Debes clasificar cada mensaje en una de estas intenciones:
+
+1. incident_report
+   El técnico está comenzando a informar una falla o incidente.
+
+2. incident_followup
+   El técnico está entregando información para completar un
+   incidente que ya estaba en conversación.
+
+3. conversation
+   El mensaje es conversación general, saludo, agradecimiento,
+   comentario, pregunta que no entrega información del incidente,
+   o cualquier mensaje que no deba almacenarse como reporte técnico.
+
+Hay datos anteriores del incidente: {has_previous_data}
+
+Reglas de conversación:
+- Si el técnico saluda, responde al saludo de forma natural.
+- Si agradece, responde cordialmente.
+- Si realiza conversación general, responde brevemente y con tono
+  profesional.
+- Si pregunta qué puedes hacer, explica brevemente que puedes ayudar
+  a registrar y dar seguimiento a incidentes técnicos.
+- No fuerces una conversación general para convertirla en incidente.
+- Un mensaje de conversación debe usar intent="conversation".
+- Para intent="conversation", utiliza conversation_reply.
+- Para intent="conversation", los campos del incidente deben ser null.
+- Para intent="conversation", clarification_question debe ser null.
+- No inventes información sobre TVTEL.
+- No inventes procedimientos internos, personas, horarios ni políticas.
+- Si no puedes responder algo con seguridad, indícalo de forma breve.
+
+Reglas de incidentes:
 - No inventes información.
 - No entregues recomendaciones de reparación.
 - No emitas diagnósticos técnicos definitivos.
 - Extrae solamente información explícita o directamente observable
-  en el mensaje del técnico.
-- El campo failure_type representa el síntoma observable, no la causa
-  técnica del problema.
-- Frases como "no enciende", "no muestra imagen", "sin audio",
-  "pantalla negra", "imagen intermitente", "se reinicia",
-  "no responde", "sin señal" o expresiones equivalentes deben
-  considerarse un failure_type válido.
-- No devuelvas null en failure_type si el mensaje ya describe
-  claramente qué comportamiento anormal presenta el equipo.
-- Puedes resumir el síntoma en una frase breve y objetiva.
-- No conviertas el síntoma en un diagnóstico. Por ejemplo:
-  "no muestra imagen" es válido; "tarjeta de video dañada" no lo es
-  salvo que el técnico lo haya afirmado explícitamente.
+  en lo dicho por el técnico.
+- El campo failure_type representa el síntoma observable, no una
+  causa técnica inventada.
 - Conserva los datos anteriores cuando el mensaje actual solo
   responda una pregunta pendiente.
+- Si existe información anterior y el mensaje actual completa,
+  corrige o amplía el incidente, usa intent="incident_followup".
+- Si el técnico claramente inicia una falla nueva, utiliza
+  intent="incident_report".
 - Si un dato realmente no está disponible, devuelve null.
-- La descripción debe conservar el sentido completo de lo reportado
-  por el técnico.
-- La prioridad debe ser low, medium, high o critical.
-- Usa critical solo ante incendios, humo, riesgo eléctrico,
-  peligro para personas o una emergencia explícita.
-- Usa high si el equipo quedó fuera de servicio, no enciende
-  o perdió completamente la señal o funcionalidad principal.
-- Usa medium para fallas normales sin riesgo inmediato.
-- Usa low para problemas menores que no impiden operar.
+- La descripción debe conservar el sentido completo de lo reportado.
+- No elimines información válida obtenida anteriormente.
+- Si el técnico corrige explícitamente un dato anterior, utiliza
+  el dato corregido.
 
-Ejemplos de extracción de failure_type:
-- "La cámara no enciende" -> "No enciende"
-- "La cámara no muestra imagen" -> "No muestra imagen"
-- "La consola quedó sin audio" -> "Sin audio"
-- "El monitor parpadea" -> "Imagen intermitente"
-- "El equipo se reinicia solo" -> "Se reinicia"
+Reglas para failure_type:
+- Frases como "no enciende", "no muestra imagen", "sin audio",
+  "pantalla negra", "imagen intermitente", "se reinicia",
+  "no responde", "sin señal" o expresiones equivalentes son
+  síntomas válidos.
+- No devuelvas null en failure_type si el técnico ya explicó
+  claramente el comportamiento anormal.
+- Puedes resumir el síntoma en una frase breve y objetiva.
+- No conviertas síntomas en diagnósticos.
+- Ejemplo válido:
+  "no muestra imagen" -> "No muestra imagen"
+- Ejemplo no válido:
+  "no muestra imagen" -> "Tarjeta de video dañada"
 
-Datos anteriores:
+Reglas de prioridad:
+- critical:
+  incendio, humo, riesgo eléctrico, peligro para personas o
+  emergencia explícita.
+- high:
+  equipo completamente fuera de servicio, no enciende, pérdida
+  total de señal o pérdida completa de su función principal.
+- medium:
+  falla operativa normal sin riesgo inmediato.
+- low:
+  problema menor que permite continuar operando.
+
+Reglas para preguntas de aclaración:
+- Si falta información necesaria para crear el incidente, genera
+  clarification_question.
+- Realiza solo una pregunta a la vez.
+- Pregunta primero por el dato faltante más importante.
+- La pregunta debe ser breve, clara y natural.
+- Mantén un tono formal y cordial.
+- No utilices siempre la misma redacción.
+- No hagas una lista de preguntas.
+- No pidas información que ya fue entregada.
+- Si no falta ningún dato, clarification_question debe ser null.
+
+Los datos necesarios para registrar un incidente son:
+- unit
+- equipment
+- failure_type
+- description
+
+Ejemplos de preguntas válidas:
+- "¿Me puedes indicar en qué unidad ocurrió la falla?"
+- "Para completar el reporte, ¿en qué unidad se encuentra el equipo?"
+- "¿Qué equipo está presentando el problema?"
+- "¿Qué comportamiento anormal presenta el equipo?"
+- "¿Puedes describirme brevemente qué ocurrió?"
+
+Ejemplos conversacionales:
+
+Mensaje:
+"Hola, buenos días"
+
+Resultado esperado:
+intent = "conversation"
+conversation_reply = una respuesta cordial al saludo
+No crear información de incidente.
+
+Mensaje:
+"Gracias"
+
+Resultado esperado:
+intent = "conversation"
+conversation_reply = una respuesta breve y cordial.
+
+Mensaje:
+"Tengo una cámara que no muestra imagen"
+
+Resultado esperado:
+intent = "incident_report"
+equipment = "Cámara"
+failure_type = "No muestra imagen"
+Preguntar solamente por el siguiente dato necesario.
+
+Mensaje:
+"Es en la móvil 8"
+
+Si existe un incidente pendiente:
+intent = "incident_followup"
+unit = "Móvil 8"
+Conservar los demás datos anteriores.
+
+Mensaje:
+"Un momento, estoy revisando"
+
+Resultado esperado:
+intent = "conversation"
+Responder naturalmente.
+No utilizar esa frase como descripción, falla, equipo ni unidad.
+No borrar los datos anteriores del incidente.
+
+Datos anteriores del incidente:
 {previous_data_json}
 
 Mensaje actual del técnico:
@@ -231,6 +418,23 @@ Mensaje actual del técnico:
             return None
 
         return clean_value
+
+    def _normalize_intent(self, value):
+        if not isinstance(value, str):
+            return "incident_report"
+
+        normalized_value = value.strip().lower()
+
+        valid_intents = {
+            "incident_report",
+            "incident_followup",
+            "conversation",
+        }
+
+        if normalized_value not in valid_intents:
+            return "incident_report"
+
+        return normalized_value
 
     def _normalize_priority(self, value):
         if not isinstance(value, str):
@@ -255,18 +459,25 @@ Mensaje actual del técnico:
             "medium",
         )
 
-    def _build_question(self, missing_fields: list[str]):
+    def _build_fallback_question(
+        self,
+        missing_fields: list[str],
+    ):
         if not missing_fields:
             return None
 
         questions = {
-            "unit": "¿En qué unidad ocurrió la falla?",
-            "equipment": "¿Qué equipo presenta la falla?",
+            "unit": (
+                "¿Me puedes indicar en qué unidad ocurrió la falla?"
+            ),
+            "equipment": (
+                "¿Qué equipo está presentando la falla?"
+            ),
             "failure_type": (
-                "¿Qué falla o síntoma presenta el equipo?"
+                "¿Qué comportamiento anormal presenta el equipo?"
             ),
             "description": (
-                "¿Puedes describir con más detalle lo ocurrido?"
+                "¿Puedes describirme brevemente qué ocurrió?"
             ),
         }
 

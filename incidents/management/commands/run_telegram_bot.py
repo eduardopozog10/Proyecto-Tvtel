@@ -89,16 +89,30 @@ class Command(BaseCommand):
                         if isinstance(update_id, int):
                             offset = update_id + 1
 
+                        started_at = time.perf_counter()
+
                         try:
                             result = handler.handle(update)
                         except Exception as error:
+                            elapsed = (
+                                time.perf_counter()
+                                - started_at
+                            )
+
                             self.stderr.write(
                                 self.style.ERROR(
                                     "Error inesperado procesando "
-                                    f"una actualización: {error}"
+                                    "una actualización "
+                                    f"después de {elapsed:.2f} s: "
+                                    f"{error}"
                                 )
                             )
                             continue
+
+                        elapsed = (
+                            time.perf_counter()
+                            - started_at
+                        )
 
                         action = result.get(
                             "action",
@@ -106,7 +120,9 @@ class Command(BaseCommand):
                         )
 
                         self.stdout.write(
-                            f"Actualización procesada: {action}"
+                            "Actualización procesada: "
+                            f"{action} "
+                            f"({elapsed:.2f} s)"
                         )
 
         except KeyboardInterrupt:

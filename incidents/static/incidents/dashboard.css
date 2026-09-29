@@ -221,66 +221,6 @@ section:last-of-type {
     color: var(--text);
 }
 
-#incident-detail hr {
-    margin: 22px 0;
-    border: 0;
-    border-top: 1px solid var(--border);
-}
-
-#incident-detail > div {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 12px;
-}
-
-#incident-detail label {
-    color: var(--text);
-    font-size: 14px;
-}
-
-#incident-status-select {
-    min-width: 200px;
-}
-
-#update-status-button {
-    min-height: 42px;
-    padding: 0 18px;
-    background: var(--primary);
-    color: #ffffff;
-    border: 0;
-    border-radius: var(--radius-small);
-    font: inherit;
-    font-weight: 700;
-    cursor: pointer;
-    transition:
-        background 0.2s ease,
-        transform 0.1s ease,
-        box-shadow 0.2s ease;
-}
-
-#update-status-button:hover {
-    background: #1e40af;
-    box-shadow:
-        0 6px 16px rgba(29, 78, 216, 0.18);
-}
-
-#update-status-button:active {
-    transform: translateY(1px);
-}
-
-#update-status-button:disabled {
-    background: #94a3b8;
-    cursor: not-allowed;
-    box-shadow: none;
-}
-
-#status-update-message {
-    color: var(--success);
-    font-size: 14px;
-    font-weight: 600;
-}
-
 @media (max-width: 1100px) {
     section:first-of-type > div {
         grid-template-columns:
@@ -315,16 +255,6 @@ section:last-of-type {
     select {
         width: 100%;
         min-width: 100%;
-    }
-
-    #incident-detail > div {
-        align-items: stretch;
-        flex-direction: column;
-    }
-
-    #incident-status-select,
-    #update-status-button {
-        width: 100%;
     }
 }
 

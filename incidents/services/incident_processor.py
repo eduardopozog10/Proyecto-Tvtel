@@ -1,3 +1,5 @@
+import unicodedata
+
 from django.db import transaction
 from django.utils import timezone
 
@@ -49,12 +51,55 @@ class IncidentProcessor:
             .first()
         )
 
+        quick_reply = self._get_quick_conversation_reply(
+            message.content
+        )
+
+        if quick_reply is not None:
+            message.status = ChannelMessage.Status.PROCESSED
+            message.processed_at = timezone.now()
+            message.save(
+                update_fields=[
+                    "status",
+                    "processed_at",
+                ]
+            )
+
+            return {
+                "action": "conversation",
+                "incident_created": False,
+                "draft_id": draft.pk if draft else None,
+                "reply": quick_reply,
+            }
+
         previous_data = draft.extracted_data if draft else {}
 
         extraction = self.ai_provider.extract_incident(
             message=message.content,
             previous_data=previous_data,
         )
+
+        if extraction.intent == "conversation":
+            reply = (
+                extraction.conversation_reply
+                or "De acuerdo. ¿En qué puedo ayudarte?"
+            )
+
+            message.status = ChannelMessage.Status.PROCESSED
+            message.processed_at = timezone.now()
+            message.save(
+                update_fields=[
+                    "status",
+                    "processed_at",
+                ]
+            )
+
+            return {
+                "action": "conversation",
+                "incident_created": False,
+                "draft_id": draft.pk if draft else None,
+                "reply": reply,
+            }
 
         extracted_data = {
             "unit": extraction.unit or previous_data.get("unit"),
@@ -212,3 +257,122 @@ class IncidentProcessor:
             ),
             "extracted_data": extracted_data,
         }
+
+    def _normalize_quick_text(self, text: str) -> str:
+        normalized_text = text.strip().lower()
+
+        normalized_text = unicodedata.normalize(
+            "NFD",
+            normalized_text,
+        )
+
+        normalized_text = "".join(
+            character
+            for character in normalized_text
+            if unicodedata.category(character) != "Mn"
+        )
+
+        for character in (
+            "¿",
+            "?",
+            "¡",
+            "!",
+            ".",
+            ",",
+            ";",
+            ":",
+        ):
+            normalized_text = normalized_text.replace(
+                character,
+                "",
+            )
+
+        normalized_text = " ".join(
+            normalized_text.split()
+        )
+
+        return normalized_text
+
+    def _get_quick_conversation_reply(
+        self,
+        text: str,
+    ) -> str | None:
+        normalized_text = self._normalize_quick_text(text)
+
+        greetings = {
+            "hola": (
+                "Hola. ¿En qué puedo ayudarte?"
+            ),
+            "buenos dias": (
+                "Buenos días. ¿En qué puedo ayudarte?"
+            ),
+            "buenas tardes": (
+                "Buenas tardes. ¿En qué puedo ayudarte?"
+            ),
+            "buenas noches": (
+                "Buenas noches. ¿En qué puedo ayudarte?"
+            ),
+            "hola buenos dias": (
+                "Buenos días. ¿En qué puedo ayudarte?"
+            ),
+            "hola buenas tardes": (
+                "Buenas tardes. ¿En qué puedo ayudarte?"
+            ),
+            "hola buenas noches": (
+                "Buenas noches. ¿En qué puedo ayudarte?"
+            ),
+            "hola como estas": (
+                "Hola. Muy bien, gracias. ¿En qué puedo ayudarte?"
+            ),
+        }
+
+        if normalized_text in greetings:
+            return greetings[normalized_text]
+
+        thanks = {
+            "gracias",
+            "muchas gracias",
+            "gracias por la ayuda",
+            "gracias por tu ayuda",
+            "perfecto gracias",
+            "ok gracias",
+        }
+
+        if normalized_text in thanks:
+            return (
+                "De nada. Quedo atento si necesitas "
+                "registrar otro incidente."
+            )
+
+        waiting_messages = {
+            "un momento",
+            "un segundo",
+            "espera un momento",
+            "dame un momento",
+            "estoy revisando",
+            "estoy verificando",
+            "un momento estoy revisando",
+            "un momento estoy verificando",
+            "dejame revisar",
+        }
+
+        if normalized_text in waiting_messages:
+            return (
+                "De acuerdo. Quedo atento mientras realizas "
+                "la revisión."
+            )
+
+        farewells = {
+            "adios",
+            "hasta luego",
+            "nos vemos",
+            "que estes bien",
+        }
+
+        if normalized_text in farewells:
+            return (
+                "Hasta luego. Quedo disponible si necesitas "
+                "registrar algún incidente."
+            )
+
+        return None
