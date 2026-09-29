@@ -1,3 +1,4 @@
+from django.db.models import Q
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -21,13 +22,78 @@ class IncidentListView(generics.ListAPIView):
     permission_classes = [AllowAny]
     serializer_class = IncidentSerializer
 
+    ALLOWED_ORDERING_FIELDS = {
+        "created_at",
+        "updated_at",
+        "priority",
+        "status",
+        "unit",
+        "equipment",
+    }
+
     def get_queryset(self):
-        return (
-            Incident.objects.select_related(
-                "technician"
-            )
-            .order_by("-created_at")
+        queryset = Incident.objects.select_related(
+            "technician"
         )
+
+        status_value = self.request.query_params.get(
+            "status"
+        )
+        priority = self.request.query_params.get(
+            "priority"
+        )
+        unit = self.request.query_params.get(
+            "unit"
+        )
+        equipment = self.request.query_params.get(
+            "equipment"
+        )
+        search = self.request.query_params.get(
+            "search"
+        )
+        ordering = self.request.query_params.get(
+            "ordering",
+            "-created_at",
+        )
+
+        if status_value:
+            queryset = queryset.filter(
+                status=status_value,
+            )
+
+        if priority:
+            queryset = queryset.filter(
+                priority=priority,
+            )
+
+        if unit:
+            queryset = queryset.filter(
+                unit__icontains=unit,
+            )
+
+        if equipment:
+            queryset = queryset.filter(
+                equipment__icontains=equipment,
+            )
+
+        if search:
+            queryset = queryset.filter(
+                Q(unit__icontains=search)
+                | Q(equipment__icontains=search)
+                | Q(failure_type__icontains=search)
+                | Q(description__icontains=search)
+                | Q(original_message__icontains=search)
+                | Q(
+                    technician__full_name__icontains=search
+                )
+            )
+
+        ordering_field = ordering.lstrip("-")
+
+        if ordering_field not in self.ALLOWED_ORDERING_FIELDS:
+            ordering = "-created_at"
+
+        return queryset.order_by(ordering)
 
 
 class IncomingTextMessageTestView(APIView):

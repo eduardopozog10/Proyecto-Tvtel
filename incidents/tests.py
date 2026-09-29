@@ -254,3 +254,302 @@ class IncomingMessageServiceTests(TestCase):
             draft.missing_fields,
             [],
         )
+
+
+class IncidentListViewTests(TestCase):
+    def setUp(self):
+        self.technician = Technician.objects.create(
+            full_name="Técnico Dashboard",
+            is_active=True,
+        )
+
+        self.high_incident = Incident.objects.create(
+            technician=self.technician,
+            unit="Unidad móvil 20",
+            equipment="Cámara principal",
+            failure_type="No enciende",
+            description=(
+                "La cámara principal de la unidad móvil 20 "
+                "no enciende."
+            ),
+            priority=Incident.Priority.HIGH,
+            status=Incident.Status.REPORTED,
+            original_message=(
+                "La cámara principal de la unidad móvil 20 "
+                "no enciende."
+            ),
+        )
+
+        self.low_incident = Incident.objects.create(
+            technician=self.technician,
+            unit="Unidad móvil 40",
+            equipment="Cámara auxiliar",
+            failure_type="Imagen intermitente",
+            description=(
+                "La cámara auxiliar de la unidad móvil 40 "
+                "presenta una falla intermitente."
+            ),
+            priority=Incident.Priority.LOW,
+            status=Incident.Status.REPORTED,
+            original_message=(
+                "La cámara auxiliar de la unidad móvil 40 "
+                "presenta una falla intermitente."
+            ),
+        )
+
+    def test_lists_incidents(self):
+        response = self.client.get(
+            "/api/v1/incidents/",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        data = response.json()
+
+        self.assertEqual(
+            data["count"],
+            2,
+        )
+        self.assertIsNone(
+            data["next"],
+        )
+        self.assertIsNone(
+            data["previous"],
+        )
+
+        results = data["results"]
+
+        self.assertEqual(
+            len(results),
+            2,
+        )
+
+        ids = {
+            item["id"]
+            for item in results
+        }
+
+        self.assertIn(
+            self.high_incident.pk,
+            ids,
+        )
+        self.assertIn(
+            self.low_incident.pk,
+            ids,
+        )
+
+    def test_filters_by_priority(self):
+        response = self.client.get(
+            "/api/v1/incidents/?priority=high",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        data = response.json()
+
+        self.assertEqual(
+            data["count"],
+            1,
+        )
+
+        results = data["results"]
+
+        self.assertEqual(
+            len(results),
+            1,
+        )
+        self.assertEqual(
+            results[0]["id"],
+            self.high_incident.pk,
+        )
+
+    def test_filters_by_status(self):
+        response = self.client.get(
+            "/api/v1/incidents/?status=reported",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        data = response.json()
+
+        self.assertEqual(
+            data["count"],
+            2,
+        )
+
+        results = data["results"]
+
+        self.assertEqual(
+            len(results),
+            2,
+        )
+
+    def test_filters_by_unit(self):
+        response = self.client.get(
+            "/api/v1/incidents/?unit=40",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        data = response.json()
+
+        self.assertEqual(
+            data["count"],
+            1,
+        )
+
+        results = data["results"]
+
+        self.assertEqual(
+            len(results),
+            1,
+        )
+        self.assertEqual(
+            results[0]["id"],
+            self.low_incident.pk,
+        )
+
+    def test_filters_by_equipment(self):
+        response = self.client.get(
+            "/api/v1/incidents/?equipment=auxiliar",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        data = response.json()
+
+        self.assertEqual(
+            data["count"],
+            1,
+        )
+
+        results = data["results"]
+
+        self.assertEqual(
+            len(results),
+            1,
+        )
+        self.assertEqual(
+            results[0]["id"],
+            self.low_incident.pk,
+        )
+
+    def test_combines_status_and_priority_filters(self):
+        response = self.client.get(
+            "/api/v1/incidents/"
+            "?status=reported&priority=low",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        data = response.json()
+
+        self.assertEqual(
+            data["count"],
+            1,
+        )
+
+        results = data["results"]
+
+        self.assertEqual(
+            len(results),
+            1,
+        )
+        self.assertEqual(
+            results[0]["id"],
+            self.low_incident.pk,
+        )
+
+    def test_searches_incidents_by_text(self):
+        response = self.client.get(
+            "/api/v1/incidents/?search=intermitente",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        data = response.json()
+
+        self.assertEqual(
+            data["count"],
+            1,
+        )
+
+        results = data["results"]
+
+        self.assertEqual(
+            len(results),
+            1,
+        )
+        self.assertEqual(
+            results[0]["id"],
+            self.low_incident.pk,
+        )
+        self.assertEqual(
+            results[0]["failure_type"],
+            "Imagen intermitente",
+        )
+
+    def test_orders_incidents_by_created_at_ascending(self):
+        response = self.client.get(
+            "/api/v1/incidents/?ordering=created_at",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        data = response.json()
+        results = data["results"]
+
+        self.assertEqual(
+            results[0]["id"],
+            self.high_incident.pk,
+        )
+        self.assertEqual(
+            results[1]["id"],
+            self.low_incident.pk,
+        )
+
+    def test_orders_incidents_by_created_at_descending(self):
+        response = self.client.get(
+            "/api/v1/incidents/?ordering=-created_at",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        data = response.json()
+        results = data["results"]
+
+        self.assertEqual(
+            results[0]["id"],
+            self.low_incident.pk,
+        )
+        self.assertEqual(
+            results[1]["id"],
+            self.high_incident.pk,
+        )  
