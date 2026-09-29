@@ -1,4 +1,4 @@
-from rest_framework import status
+from rest_framework import generics, status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -6,11 +6,28 @@ from rest_framework.views import APIView
 from incidents.messaging.telegram_update_handler import (
     TelegramUpdateHandler,
 )
-from incidents.serializers import IncomingTextMessageSerializer
+from incidents.models import Incident
+from incidents.serializers import (
+    IncidentSerializer,
+    IncomingTextMessageSerializer,
+)
 from incidents.services.incoming_message_service import (
     ChannelNotAuthorizedError,
     IncomingMessageService,
 )
+
+
+class IncidentListView(generics.ListAPIView):
+    permission_classes = [AllowAny]
+    serializer_class = IncidentSerializer
+
+    def get_queryset(self):
+        return (
+            Incident.objects.select_related(
+                "technician"
+            )
+            .order_by("-created_at")
+        )
 
 
 class IncomingTextMessageTestView(APIView):
@@ -108,4 +125,4 @@ class TelegramWebhookView(APIView):
                 "result": result,
             },
             status=status.HTTP_200_OK,
-        )   
+        )

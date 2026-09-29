@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from incidents.models import TechnicianChannel
+from incidents.models import Incident, TechnicianChannel
 
 
 class IncomingTextMessageSerializer(serializers.Serializer):
@@ -61,3 +61,42 @@ class IncomingTextMessageSerializer(serializers.Serializer):
             data["external_chat_id"] = data["external_user_id"]
 
         return data
+
+
+class IncidentSerializer(serializers.ModelSerializer):
+    code = serializers.CharField(
+        read_only=True,
+    )
+    technician_name = serializers.CharField(
+        source="technician.full_name",
+        read_only=True,
+    )
+    priority_display = serializers.CharField(
+        source="get_priority_display",
+        read_only=True,
+    )
+    status_display = serializers.CharField(
+        source="get_status_display",
+        read_only=True,
+    )
+
+    class Meta:
+        model = Incident
+        fields = (
+            "id",
+            "code",
+            "technician_name",
+            "unit",
+            "equipment",
+            "failure_type",
+            "description",
+            "priority",
+            "priority_display",
+            "status",
+            "status_display",
+            "original_message",
+            "created_at",
+            "updated_at",
+            "resolved_at",
+        )
+        read_only_fields = fields

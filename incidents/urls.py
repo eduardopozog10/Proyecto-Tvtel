@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    IncidentListView,
     IncomingTextMessageTestView,
     TelegramWebhookView,
 )
@@ -9,6 +10,11 @@ from .views import (
 app_name = "incidents"
 
 urlpatterns = [
+    path(
+        "incidents/",
+        IncidentListView.as_view(),
+        name="incident-list",
+    ),
     path(
         "messages/test/",
         IncomingTextMessageTestView.as_view(),
