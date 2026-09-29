@@ -1,0 +1,586 @@
+{% load static %}
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+    <title>TVTEL - Gestión de Incidentes</title>
+
+    <link
+        rel="stylesheet"
+        href="{% static 'incidents/dashboard.css' %}"
+    >
+</head>
+<body>
+    <form hidden>
+        {% csrf_token %}
+    </form>
+
+    <main>
+        <header>
+            <h1>Gestión de Incidentes TVTEL</h1>
+            <p>
+                Monitoreo y seguimiento de reportes técnicos.
+            </p>
+        </header>
+
+        <section>
+            <h2>Resumen</h2>
+
+            <div>
+                <article>
+                    <span>Total</span>
+                    <strong id="summary-total">0</strong>
+                </article>
+
+                <article>
+                    <span>Reportados</span>
+                    <strong id="summary-reported">0</strong>
+                </article>
+
+                <article>
+                    <span>En revisión</span>
+                    <strong id="summary-under-review">0</strong>
+                </article>
+
+                <article>
+                    <span>En progreso</span>
+                    <strong id="summary-in-progress">0</strong>
+                </article>
+
+                <article>
+                    <span>Resueltos</span>
+                    <strong id="summary-resolved">0</strong>
+                </article>
+            </div>
+        </section>
+
+        <section>
+            <h2>Incidentes</h2>
+
+            <div>
+                <input
+                    id="search-input"
+                    type="search"
+                    placeholder="Buscar incidente..."
+                >
+
+                <select id="status-filter">
+                    <option value="">Todos los estados</option>
+                    <option value="reported">Reportado</option>
+                    <option value="under_review">
+                        En revisión
+                    </option>
+                    <option value="in_progress">
+                        En progreso
+                    </option>
+                    <option value="resolved">Resuelto</option>
+                    <option value="closed">Cerrado</option>
+                    <option value="cancelled">
+                        Cancelado
+                    </option>
+                </select>
+
+                <select id="priority-filter">
+                    <option value="">
+                        Todas las prioridades
+                    </option>
+                    <option value="low">Baja</option>
+                    <option value="medium">Media</option>
+                    <option value="high">Alta</option>
+                    <option value="critical">
+                        Crítica
+                    </option>
+                </select>
+            </div>
+
+            <div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Código</th>
+                            <th>Unidad</th>
+                            <th>Equipo</th>
+                            <th>Falla</th>
+                            <th>Prioridad</th>
+                            <th>Estado</th>
+                            <th>Técnico</th>
+                            <th>Fecha</th>
+                        </tr>
+                    </thead>
+
+                    <tbody id="incident-table-body">
+                    </tbody>
+                </table>
+            </div>
+
+            <p id="incident-empty-message" hidden>
+                No se encontraron incidentes.
+            </p>
+        </section>
+
+        <section>
+            <h2>Detalle del incidente</h2>
+
+            <div id="incident-detail">
+                Selecciona un incidente para ver su detalle.
+            </div>
+        </section>
+    </main>
+
+    <script>
+        const summaryTotal = document.getElementById(
+            "summary-total"
+        );
+        const summaryReported = document.getElementById(
+            "summary-reported"
+        );
+        const summaryUnderReview = document.getElementById(
+            "summary-under-review"
+        );
+        const summaryInProgress = document.getElementById(
+            "summary-in-progress"
+        );
+        const summaryResolved = document.getElementById(
+            "summary-resolved"
+        );
+
+        const searchInput = document.getElementById(
+            "search-input"
+        );
+        const statusFilter = document.getElementById(
+            "status-filter"
+        );
+        const priorityFilter = document.getElementById(
+            "priority-filter"
+        );
+
+        const incidentTableBody = document.getElementById(
+            "incident-table-body"
+        );
+        const incidentEmptyMessage = document.getElementById(
+            "incident-empty-message"
+        );
+        const incidentDetail = document.getElementById(
+            "incident-detail"
+        );
+
+        let selectedIncidentId = null;
+
+        function formatDate(value) {
+            if (!value) {
+                return "-";
+            }
+
+            return new Intl.DateTimeFormat(
+                "es-CL",
+                {
+                    dateStyle: "short",
+                    timeStyle: "short",
+                }
+            ).format(
+                new Date(value)
+            );
+        }
+
+        function getCsrfToken() {
+            const input = document.querySelector(
+                "[name=csrfmiddlewaretoken]"
+            );
+
+            return input ? input.value : "";
+        }
+
+        async function loadSummary() {
+            try {
+                const response = await fetch(
+                    "/api/v1/incidents/summary/"
+                );
+
+                if (!response.ok) {
+                    throw new Error(
+                        "No fue posible cargar el resumen."
+                    );
+                }
+
+                const data = await response.json();
+
+                summaryTotal.textContent = data.total;
+                summaryReported.textContent = (
+                    data.by_status.reported
+                );
+                summaryUnderReview.textContent = (
+                    data.by_status.under_review
+                );
+                summaryInProgress.textContent = (
+                    data.by_status.in_progress
+                );
+                summaryResolved.textContent = (
+                    data.by_status.resolved
+                );
+            } catch (error) {
+                console.error(error);
+            }
+        }
+
+        function buildIncidentUrl() {
+            const params = new URLSearchParams();
+
+            const search = searchInput.value.trim();
+            const status = statusFilter.value;
+            const priority = priorityFilter.value;
+
+            if (search) {
+                params.set(
+                    "search",
+                    search
+                );
+            }
+
+            if (status) {
+                params.set(
+                    "status",
+                    status
+                );
+            }
+
+            if (priority) {
+                params.set(
+                    "priority",
+                    priority
+                );
+            }
+
+            params.set(
+                "ordering",
+                "-created_at"
+            );
+
+            return (
+                "/api/v1/incidents/?" +
+                params.toString()
+            );
+        }
+
+        async function loadIncidents() {
+            incidentTableBody.innerHTML = "";
+            incidentEmptyMessage.hidden = true;
+
+            try {
+                const response = await fetch(
+                    buildIncidentUrl()
+                );
+
+                if (!response.ok) {
+                    throw new Error(
+                        "No fue posible cargar los incidentes."
+                    );
+                }
+
+                const data = await response.json();
+                const incidents = data.results;
+
+                if (incidents.length === 0) {
+                    incidentEmptyMessage.hidden = false;
+                    return;
+                }
+
+                incidents.forEach(
+                    (incident) => {
+                        const row = document.createElement(
+                            "tr"
+                        );
+
+                        row.innerHTML = `
+                            <td>${incident.code}</td>
+                            <td>${incident.unit}</td>
+                            <td>${incident.equipment}</td>
+                            <td>${incident.failure_type}</td>
+                            <td>
+                                ${incident.priority_display}
+                            </td>
+                            <td>
+                                ${incident.status_display}
+                            </td>
+                            <td>
+                                ${incident.technician_name}
+                            </td>
+                            <td>
+                                ${formatDate(
+                                    incident.created_at
+                                )}
+                            </td>
+                        `;
+
+                        row.addEventListener(
+                            "click",
+                            () => {
+                                loadIncidentDetail(
+                                    incident.id
+                                );
+                            }
+                        );
+
+                        incidentTableBody.appendChild(
+                            row
+                        );
+                    }
+                );
+            } catch (error) {
+                console.error(error);
+
+                incidentEmptyMessage.hidden = false;
+                incidentEmptyMessage.textContent = (
+                    "No fue posible cargar los incidentes."
+                );
+            }
+        }
+
+        async function loadIncidentDetail(incidentId) {
+            selectedIncidentId = incidentId;
+
+            try {
+                const response = await fetch(
+                    `/api/v1/incidents/${incidentId}/`
+                );
+
+                if (!response.ok) {
+                    throw new Error(
+                        "No fue posible cargar el detalle."
+                    );
+                }
+
+                const incident = await response.json();
+
+                incidentDetail.innerHTML = `
+                    <p>
+                        <strong>Código:</strong>
+                        ${incident.code}
+                    </p>
+
+                    <p>
+                        <strong>Unidad:</strong>
+                        ${incident.unit}
+                    </p>
+
+                    <p>
+                        <strong>Equipo:</strong>
+                        ${incident.equipment}
+                    </p>
+
+                    <p>
+                        <strong>Tipo de falla:</strong>
+                        ${incident.failure_type}
+                    </p>
+
+                    <p>
+                        <strong>Descripción:</strong>
+                        ${incident.description}
+                    </p>
+
+                    <p>
+                        <strong>Prioridad:</strong>
+                        ${incident.priority_display}
+                    </p>
+
+                    <p>
+                        <strong>Estado:</strong>
+                        ${incident.status_display}
+                    </p>
+
+                    <p>
+                        <strong>Técnico:</strong>
+                        ${incident.technician_name}
+                    </p>
+
+                    <p>
+                        <strong>Fecha de creación:</strong>
+                        ${formatDate(
+                            incident.created_at
+                        )}
+                    </p>
+
+                    <p>
+                        <strong>Fecha de resolución:</strong>
+                        ${formatDate(
+                            incident.resolved_at
+                        )}
+                    </p>
+
+                    <p>
+                        <strong>Mensaje original:</strong>
+                        ${incident.original_message}
+                    </p>
+
+                    <hr>
+
+                    <div>
+                        <label for="incident-status-select">
+                            <strong>
+                                Cambiar estado
+                            </strong>
+                        </label>
+
+                        <select id="incident-status-select">
+                            <option value="reported">
+                                Reportado
+                            </option>
+                            <option value="under_review">
+                                En revisión
+                            </option>
+                            <option value="in_progress">
+                                En progreso
+                            </option>
+                            <option value="resolved">
+                                Resuelto
+                            </option>
+                            <option value="closed">
+                                Cerrado
+                            </option>
+                            <option value="cancelled">
+                                Cancelado
+                            </option>
+                        </select>
+
+                        <button
+                            id="update-status-button"
+                            type="button"
+                        >
+                            Actualizar estado
+                        </button>
+
+                        <span
+                            id="status-update-message"
+                        ></span>
+                    </div>
+                `;
+
+                const statusSelect = document.getElementById(
+                    "incident-status-select"
+                );
+
+                statusSelect.value = incident.status;
+
+                const updateButton = document.getElementById(
+                    "update-status-button"
+                );
+
+                updateButton.addEventListener(
+                    "click",
+                    updateIncidentStatus
+                );
+            } catch (error) {
+                console.error(error);
+
+                incidentDetail.textContent = (
+                    "No fue posible cargar el detalle "
+                    + "del incidente."
+                );
+            }
+        }
+
+        async function updateIncidentStatus() {
+            if (!selectedIncidentId) {
+                return;
+            }
+
+            const statusSelect = document.getElementById(
+                "incident-status-select"
+            );
+            const updateButton = document.getElementById(
+                "update-status-button"
+            );
+            const message = document.getElementById(
+                "status-update-message"
+            );
+
+            const newStatus = statusSelect.value;
+
+            updateButton.disabled = true;
+            message.textContent = "Actualizando...";
+
+            try {
+                const response = await fetch(
+                    `/api/v1/incidents/${selectedIncidentId}/`,
+                    {
+                        method: "PATCH",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "X-CSRFToken": getCsrfToken(),
+                        },
+                        body: JSON.stringify(
+                            {
+                                status: newStatus,
+                            }
+                        ),
+                    }
+                );
+
+                if (!response.ok) {
+                    throw new Error(
+                        "No fue posible actualizar el estado."
+                    );
+                }
+
+                message.textContent = (
+                    "Estado actualizado correctamente."
+                );
+
+                await Promise.all([
+                    loadSummary(),
+                    loadIncidents(),
+                ]);
+
+                await loadIncidentDetail(
+                    selectedIncidentId
+                );
+            } catch (error) {
+                console.error(error);
+
+                message.textContent = (
+                    "No fue posible actualizar el estado."
+                );
+
+                updateButton.disabled = false;
+            }
+        }
+
+        let searchTimeout = null;
+
+        searchInput.addEventListener(
+            "input",
+            () => {
+                clearTimeout(searchTimeout);
+
+                searchTimeout = setTimeout(
+                    loadIncidents,
+                    300
+                );
+            }
+        );
+
+        statusFilter.addEventListener(
+            "change",
+            loadIncidents
+        );
+
+        priorityFilter.addEventListener(
+            "change",
+            loadIncidents
+        );
+
+        async function initializeDashboard() {
+            await Promise.all([
+                loadSummary(),
+                loadIncidents(),
+            ]);
+        }
+
+        initializeDashboard();
+    </script>
+</body>
+</html>

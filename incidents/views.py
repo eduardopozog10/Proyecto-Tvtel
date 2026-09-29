@@ -1,4 +1,4 @@
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny
@@ -96,6 +96,100 @@ class IncidentListView(generics.ListAPIView):
             ordering = "-created_at"
 
         return queryset.order_by(ordering)
+
+
+class IncidentSummaryView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        summary = Incident.objects.aggregate(
+            total=Count("id"),
+            reported=Count(
+                "id",
+                filter=Q(
+                    status=Incident.Status.REPORTED
+                ),
+            ),
+            under_review=Count(
+                "id",
+                filter=Q(
+                    status=Incident.Status.UNDER_REVIEW
+                ),
+            ),
+            in_progress=Count(
+                "id",
+                filter=Q(
+                    status=Incident.Status.IN_PROGRESS
+                ),
+            ),
+            resolved=Count(
+                "id",
+                filter=Q(
+                    status=Incident.Status.RESOLVED
+                ),
+            ),
+            closed=Count(
+                "id",
+                filter=Q(
+                    status=Incident.Status.CLOSED
+                ),
+            ),
+            cancelled=Count(
+                "id",
+                filter=Q(
+                    status=Incident.Status.CANCELLED
+                ),
+            ),
+            low=Count(
+                "id",
+                filter=Q(
+                    priority=Incident.Priority.LOW
+                ),
+            ),
+            medium=Count(
+                "id",
+                filter=Q(
+                    priority=Incident.Priority.MEDIUM
+                ),
+            ),
+            high=Count(
+                "id",
+                filter=Q(
+                    priority=Incident.Priority.HIGH
+                ),
+            ),
+            critical=Count(
+                "id",
+                filter=Q(
+                    priority=Incident.Priority.CRITICAL
+                ),
+            ),
+        )
+
+        return Response(
+            {
+                "total": summary["total"],
+                "by_status": {
+                    "reported": summary["reported"],
+                    "under_review": summary[
+                        "under_review"
+                    ],
+                    "in_progress": summary[
+                        "in_progress"
+                    ],
+                    "resolved": summary["resolved"],
+                    "closed": summary["closed"],
+                    "cancelled": summary["cancelled"],
+                },
+                "by_priority": {
+                    "low": summary["low"],
+                    "medium": summary["medium"],
+                    "high": summary["high"],
+                    "critical": summary["critical"],
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class IncidentDetailView(generics.RetrieveAPIView):

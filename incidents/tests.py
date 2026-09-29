@@ -753,3 +753,115 @@ class IncidentDetailViewTests(TestCase):
         self.assertIsNone(
             self.incident.resolved_at,
         )
+
+
+class IncidentSummaryViewTests(TestCase):
+    def setUp(self):
+        self.technician = Technician.objects.create(
+            full_name="Técnico Resumen",
+            is_active=True,
+        )
+
+        Incident.objects.create(
+            technician=self.technician,
+            unit="Unidad móvil 1",
+            equipment="Cámara",
+            failure_type="No enciende",
+            description="La cámara no enciende.",
+            priority=Incident.Priority.HIGH,
+            status=Incident.Status.REPORTED,
+            original_message="La cámara no enciende.",
+        )
+
+        Incident.objects.create(
+            technician=self.technician,
+            unit="Unidad móvil 2",
+            equipment="Router",
+            failure_type="Sin conexión",
+            description="El router no tiene conexión.",
+            priority=Incident.Priority.LOW,
+            status=Incident.Status.UNDER_REVIEW,
+            original_message="El router no tiene conexión.",
+        )
+
+        Incident.objects.create(
+            technician=self.technician,
+            unit="Unidad móvil 3",
+            equipment="Consola",
+            failure_type="Sin audio",
+            description="La consola no entrega audio.",
+            priority=Incident.Priority.CRITICAL,
+            status=Incident.Status.RESOLVED,
+            original_message="La consola no entrega audio.",
+            resolved_at=timezone.now(),
+        )
+
+        Incident.objects.create(
+            technician=self.technician,
+            unit="Unidad móvil 4",
+            equipment="Transmisor",
+            failure_type="Falla intermitente",
+            description="El transmisor presenta una falla.",
+            priority=Incident.Priority.MEDIUM,
+            status=Incident.Status.CLOSED,
+            original_message="El transmisor presenta una falla.",
+        )
+
+    def test_returns_incident_summary(self):
+        response = self.client.get(
+            "/api/v1/incidents/summary/",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        data = response.json()
+
+        self.assertEqual(
+            data["total"],
+            4,
+        )
+
+        self.assertEqual(
+            data["by_status"]["reported"],
+            1,
+        )
+        self.assertEqual(
+            data["by_status"]["under_review"],
+            1,
+        )
+        self.assertEqual(
+            data["by_status"]["in_progress"],
+            0,
+        )
+        self.assertEqual(
+            data["by_status"]["resolved"],
+            1,
+        )
+        self.assertEqual(
+            data["by_status"]["closed"],
+            1,
+        )
+        self.assertEqual(
+            data["by_status"]["cancelled"],
+            0,
+        )
+
+        self.assertEqual(
+            data["by_priority"]["low"],
+            1,
+        )
+        self.assertEqual(
+            data["by_priority"]["medium"],
+            1,
+        )
+        self.assertEqual(
+            data["by_priority"]["high"],
+            1,
+        )
+        self.assertEqual(
+            data["by_priority"]["critical"],
+            1,
+        )
