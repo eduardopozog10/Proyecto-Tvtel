@@ -468,7 +468,9 @@ section:nth-of-type(2) > div:first-of-type {
 }
 
 section:nth-of-type(2) > div:nth-of-type(2) {
-    overflow: hidden;
+    max-height: 520px;
+
+    overflow: auto;
 
     border: 1px solid var(--border);
     border-radius: 13px;
@@ -496,11 +498,25 @@ thead {
 }
 
 th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+
     padding: 13px 14px;
 
     color: var(--text-soft);
 
+    background:
+        linear-gradient(
+            180deg,
+            #f8fafc 0%,
+            #f1f5f9 100%
+        );
+
     border-bottom: 1px solid var(--border);
+
+    box-shadow:
+        0 1px 0 rgba(15, 23, 42, 0.04);
 
     font-size: 11px;
     font-weight: 750;
@@ -541,6 +557,45 @@ tbody tr:hover {
 
     box-shadow:
         inset 3px 0 0 var(--primary);
+}
+
+tbody tr.is-selected {
+    background: var(--primary-soft);
+
+    box-shadow:
+        inset 4px 0 0 var(--primary);
+}
+
+tbody tr.is-selected:hover {
+    background: var(--primary-soft);
+}
+
+tbody tr.is-new:not(.is-selected) {
+    background: var(--success-soft);
+
+    box-shadow:
+        inset 4px 0 0 var(--success);
+
+    animation:
+        new-incident-pulse 1.4s ease-in-out 2;
+}
+
+tbody tr.is-new:not(.is-selected):hover {
+    background: var(--success-soft);
+
+    box-shadow:
+        inset 4px 0 0 var(--success);
+}
+
+@keyframes new-incident-pulse {
+    0%,
+    100% {
+        background: var(--success-soft);
+    }
+
+    50% {
+        background: #dcfce7;
+    }
 }
 
 tbody tr:last-child td {

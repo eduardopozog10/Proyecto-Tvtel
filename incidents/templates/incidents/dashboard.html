@@ -362,6 +362,7 @@
 
     <script>
         const NEW_INCIDENT_CHECK_INTERVAL_MS = 5000;
+        const NEW_INCIDENT_HIGHLIGHT_MS = 7000;
 
         const metricTotal = document.getElementById(
             "metric-total"
@@ -458,6 +459,10 @@
         let selectedIncidentId = null;
         let refreshInProgress = false;
         let lastKnownIncidentCount = null;
+
+        let knownIncidentIds = new Set();
+        let highlightNewIncidentsOnNextLoad = false;
+        let incidentBaselineReady = false;
 
         function escapeHtml(value) {
             if (
@@ -1544,6 +1549,43 @@
                 const data = await response.json();
                 const incidents = data.results;
 
+                const isDefaultIncidentView = (
+                    searchInput.value.trim() === ""
+                    && statusFilter.value === ""
+                    && priorityFilter.value === ""
+                );
+
+                const currentIncidentIds = new Set(
+                    incidents.map(
+                        (incident) => incident.id
+                    )
+                );
+
+                const newIncidentIds = new Set();
+
+                if (
+                    isDefaultIncidentView
+                    && incidentBaselineReady
+                    && highlightNewIncidentsOnNextLoad
+                ) {
+                    incidents.forEach(
+                        (incident) => {
+                            if (!knownIncidentIds.has(incident.id)) {
+                                newIncidentIds.add(
+                                    incident.id
+                                );
+                            }
+                        }
+                    );
+                }
+
+                if (isDefaultIncidentView) {
+                    knownIncidentIds = currentIncidentIds;
+                    incidentBaselineReady = true;
+                }
+
+                highlightNewIncidentsOnNextLoad = false;
+
                 if (incidents.length === 0) {
                     incidentTableBody.replaceChildren();
 
@@ -1561,6 +1603,27 @@
                         const row = document.createElement(
                             "tr"
                         );
+
+                        row.dataset.incidentId = incident.id;
+
+                        if (incident.id === selectedIncidentId) {
+                            row.classList.add("is-selected");
+                        }
+
+                        if (newIncidentIds.has(incident.id)) {
+                            row.classList.add(
+                                "is-new"
+                            );
+
+                            window.setTimeout(
+                                () => {
+                                    row.classList.remove(
+                                        "is-new"
+                                    );
+                                },
+                                NEW_INCIDENT_HIGHLIGHT_MS
+                            );
+                        }
 
                         row.innerHTML = `
                             <td>
@@ -1625,6 +1688,22 @@
                         row.addEventListener(
                             "click",
                             () => {
+                                selectedIncidentId = incident.id;
+
+                                incidentTableBody
+                                    .querySelectorAll("tr")
+                                    .forEach(
+                                        (tableRow) => {
+                                            tableRow.classList.remove(
+                                                "is-selected"
+                                            );
+                                        }
+                                    );
+
+                                row.classList.add(
+                                    "is-selected"
+                                );
+
                                 loadIncidentDetail(
                                     incident.id
                                 );
@@ -1998,10 +2077,10 @@
             "change",
             async () => {
                 if (
-                    periodFilter.value
-                    === "custom"
+                    data.total
+                    > lastKnownIncidentCount
                 ) {
-                    lastKnownIncidentCount = null;
+                    highlightNewIncidentsOnNextLoad = true;
 
                     await refreshDashboardData();
                 }

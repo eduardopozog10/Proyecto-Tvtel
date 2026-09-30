@@ -25,13 +25,38 @@ class IncidentProcessor:
     FALLBACK_QUESTIONS = {
         "unit": "¿En qué unidad ocurrió la falla?",
         "equipment": "¿Qué equipo presenta la falla?",
-        "failure_type": "¿Qué tipo de falla presenta el equipo?",
-        "description": "¿Puedes describir con más detalle lo ocurrido?",
+        "failure_type": (
+            "¿Qué problema presenta exactamente el equipo? "
+            "Por ejemplo: pérdida de señal, imagen intermitente, "
+            "no enciende, ruido, cortes u otro síntoma."
+        ),
+        "description": (
+            "¿Puedes describir con un poco más de detalle "
+            "qué está ocurriendo con el equipo?"
+        ),
         "priority": (
             "Para completar el reporte, ¿qué prioridad le asignas: "
             "Baja, Media, Alta o Crítica?"
         ),
     }
+
+    GENERIC_FAILURE_TYPES = {
+        "problema",
+        "problemas",
+        "problema de funcionamiento",
+        "problemas de funcionamiento",
+        "falla",
+        "falla general",
+        "falla de funcionamiento",
+        "mal funcionamiento",
+    }
+
+    GENERIC_DESCRIPTION_MARKERS = (
+        "se reportan problemas de funcionamiento",
+        "se reporta un problema de funcionamiento",
+        "presenta problemas de funcionamiento",
+        "se presentan problemas de funcionamiento",
+    )
 
     PRIORITY_GUIDANCE = (
         "Para finalizar el reporte necesito que selecciones una prioridad:\n\n"
@@ -228,6 +253,10 @@ class IncidentProcessor:
                 extraction.clarification_question
             )
 
+        details_were_generic = self._sanitize_incident_details(
+            extracted_data
+        )
+
         valid_priorities = {
             choice[0]
             for choice in Incident.Priority.choices
@@ -245,7 +274,12 @@ class IncidentProcessor:
             if not extracted_data.get(field_name)
         ]
 
-        if missing_fields and not clarification_question:
+        if details_were_generic:
+            clarification_question = self.FALLBACK_QUESTIONS[
+                "failure_type"
+            ]
+
+        elif missing_fields and not clarification_question:
             clarification_question = self.FALLBACK_QUESTIONS[
                 missing_fields[0]
             ]
@@ -364,6 +398,58 @@ class IncidentProcessor:
             ),
             "extracted_data": extracted_data,
         }
+
+    def _sanitize_incident_details(
+        self,
+        extracted_data: dict,
+    ) -> bool:
+        details_were_generic = False
+
+        failure_type = extracted_data.get(
+            "failure_type"
+        )
+
+        if failure_type:
+            normalized_failure_type = (
+                self._normalize_quick_text(
+                    str(failure_type)
+                )
+            )
+
+            if (
+                normalized_failure_type
+                in self.GENERIC_FAILURE_TYPES
+            ):
+                extracted_data["failure_type"] = None
+                details_were_generic = True
+
+        description = extracted_data.get(
+            "description"
+        )
+
+        if description:
+            normalized_description = (
+                self._normalize_quick_text(
+                    str(description)
+                )
+            )
+
+            description_is_generic = any(
+                marker in normalized_description
+                for marker
+                in self.GENERIC_DESCRIPTION_MARKERS
+            )
+
+            if (
+                description_is_generic
+                and len(
+                    normalized_description.split()
+                ) <= 14
+            ):
+                extracted_data["description"] = None
+                details_were_generic = True
+
+        return details_were_generic
 
     def _handle_ai_timeout(
         self,

@@ -155,6 +155,14 @@ class GeminiAIProvider(AIProvider):
         )
 
         if intent == "conversation":
+            if not conversation_reply:
+                conversation_reply = (
+                    "Solo puedo ayudarte con reportes técnicos de TVTEL. "
+                    "Puedo registrar un incidente, completar o corregir "
+                    "un reporte pendiente y recopilar la unidad, equipo, "
+                    "falla, descripción y prioridad."
+                )
+
             return IncidentExtractionResult(
                 intent=intent,
                 conversation_reply=conversation_reply,
@@ -185,7 +193,6 @@ class GeminiAIProvider(AIProvider):
         description = (
             self._clean_text(response_data.get("description"))
             or previous_data.get("description")
-            or message.strip()
         )
 
         priority = self._normalize_priority(
@@ -400,6 +407,31 @@ Objetivo:
 Tono:
 formal, cordial, profesional, claro, natural y breve.
 
+Alcance del asistente:
+- Este asistente está dedicado exclusivamente a TVTEL y al
+  registro de incidentes técnicos.
+- Puedes ayudar a:
+  - iniciar un reporte de incidente;
+  - completar un reporte pendiente;
+  - corregir o ampliar datos de un reporte pendiente;
+  - recopilar unidad o ubicación;
+  - recopilar equipo afectado;
+  - recopilar síntoma o tipo de falla;
+  - recopilar descripción de lo ocurrido;
+  - recopilar la prioridad confirmada por el técnico.
+- Puedes responder saludos, agradecimientos y mensajes breves
+  relacionados con esta función.
+- Si el usuario pregunta por cualquier tema ajeno a TVTEL,
+  incidentes técnicos o al proceso de registro de reportes,
+  NO respondas la pregunta.
+- En esos casos usa intent="conversation" y responde de forma
+  breve indicando que solo puedes ayudar con reportes técnicos
+  de TVTEL y explicando cuáles son tus funciones.
+- No proporciones información general, noticias, programación,
+  entretenimiento, política, deportes, matemáticas, consejos
+  personales ni otros temas ajenos al sistema.
+- Nunca inventes funciones que el sistema no posee.
+
 Intenciones:
 - incident_report: inicia un nuevo incidente.
 - incident_followup: completa, corrige o amplía un incidente pendiente.
@@ -418,7 +450,23 @@ Reglas del incidente:
 - Extrae solo información explícita o directamente observable.
 - No entregues recomendaciones de reparación.
 - No emitas diagnósticos técnicos definitivos.
-- failure_type es el síntoma observable, no una causa inventada.
+- failure_type debe describir un síntoma concreto informado por
+  el técnico, no una causa inventada.
+- Expresiones vagas como "tiene problemas", "está fallando",
+  "hay una falla" o "problemas de funcionamiento" NO son un
+  failure_type suficiente por sí solas.
+- Si el técnico todavía no explicó qué comportamiento anormal
+  presenta el equipo, failure_type debe ser null.
+- description debe representar información real aportada por
+  el técnico sobre lo que está ocurriendo.
+- No inventes una descripción para completar el reporte.
+- No reformules una frase vaga como "tiene problemas" para
+  hacerla parecer una descripción técnica válida.
+- Si no existe información suficiente para description,
+  devuelve description=null.
+- Si el técnico informa un síntoma concreto, puedes redactar
+  description de forma objetiva utilizando solamente la
+  información entregada.
 - Conserva datos anteriores válidos.
 - Si el técnico corrige un dato, usa el valor corregido.
 - Si existe un incidente pendiente y el mensaje lo completa,
@@ -453,6 +501,27 @@ Preguntas de aclaración:
 - Si no falta ningún dato, clarification_question=null.
 
 Ejemplos:
+"Tengo problemas con la cámara OB10"
+-> incident_report
+-> equipment="Cámara OB10"
+-> failure_type=null
+-> description=null
+-> no inventes "Problemas de funcionamiento".
+-> pregunta qué problema o síntoma presenta exactamente.
+
+"La cámara OB10 pierde señal cada pocos segundos"
+-> incident_report
+-> equipment="Cámara OB10"
+-> failure_type="Pérdida intermitente de señal"
+-> description puede indicar objetivamente que la cámara pierde
+   señal cada pocos segundos.
+
+"¿Quién ganó el partido de ayer?"
+-> conversation
+-> no respondas la pregunta deportiva.
+-> explica brevemente que solo puedes ayudar con reportes
+   técnicos de TVTEL.
+
 "Tengo una cámara que no muestra imagen"
 -> incident_report
 -> equipment="Cámara"
