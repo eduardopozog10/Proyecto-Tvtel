@@ -1,10 +1,17 @@
 import json
+import logging
+import time
 
+import httpx
 from django.conf import settings
 from google import genai
+from google.genai import types
 
 from .base import AIProvider
 from .schemas import IncidentExtractionResult
+
+
+logger = logging.getLogger(__name__)
 
 
 class GeminiAIProvider(AIProvider):
@@ -13,7 +20,11 @@ class GeminiAIProvider(AIProvider):
         "equipment",
         "failure_type",
         "description",
+        "priority",
     )
+
+    TOTAL_TIMEOUT_SECONDS = 45.0
+    FIRST_ATTEMPT_TIMEOUT_SECONDS = 30.0
 
     RESPONSE_SCHEMA = {
         "type": "object",
@@ -63,7 +74,9 @@ class GeminiAIProvider(AIProvider):
             "priority": {
                 "type": ["string", "null"],
                 "description": (
-                    "Prioridad: low, medium, high o critical."
+                    "Prioridad confirmada explícitamente por el técnico: "
+                    "low, medium, high o critical. Debe ser null si el "
+                    "técnico todavía no ha confirmado una prioridad."
                 ),
             },
             "clarification_question": {
@@ -93,8 +106,14 @@ class GeminiAIProvider(AIProvider):
             )
 
         self.model = settings.GEMINI_MODEL
+
         self.client = genai.Client(
             api_key=settings.GEMINI_API_KEY,
+            http_options=types.HttpOptions(
+                retry_options=types.HttpRetryOptions(
+                    attempts=1,
+                ),
+            ),
         )
 
     def extract_incident(
@@ -109,14 +128,8 @@ class GeminiAIProvider(AIProvider):
             previous_data=previous_data,
         )
 
-        interaction = self.client.interactions.create(
-            model=self.model,
-            input=prompt,
-            response_format={
-                "type": "text",
-                "mime_type": "application/json",
-                "schema": self.RESPONSE_SCHEMA,
-            },
+        interaction = self._create_interaction_with_retry(
+            prompt=prompt,
         )
 
         response_text = interaction.output_text
@@ -158,19 +171,23 @@ class GeminiAIProvider(AIProvider):
             self._clean_text(response_data.get("unit"))
             or previous_data.get("unit")
         )
+
         equipment = (
             self._clean_text(response_data.get("equipment"))
             or previous_data.get("equipment")
         )
+
         failure_type = (
             self._clean_text(response_data.get("failure_type"))
             or previous_data.get("failure_type")
         )
+
         description = (
             self._clean_text(response_data.get("description"))
             or previous_data.get("description")
             or message.strip()
         )
+
         priority = self._normalize_priority(
             response_data.get("priority")
             or previous_data.get("priority")
@@ -221,6 +238,143 @@ class GeminiAIProvider(AIProvider):
             },
         )
 
+    def _create_interaction_with_retry(
+        self,
+        prompt: str,
+    ):
+        started_at = time.perf_counter()
+        last_error = None
+
+        for attempt_number in (1, 2):
+            elapsed = time.perf_counter() - started_at
+            remaining = self.TOTAL_TIMEOUT_SECONDS - elapsed
+
+            if remaining <= 0:
+                break
+
+            if attempt_number == 1:
+                attempt_timeout = min(
+                    self.FIRST_ATTEMPT_TIMEOUT_SECONDS,
+                    remaining,
+                )
+            else:
+                attempt_timeout = remaining
+
+            attempt_started_at = time.perf_counter()
+
+            try:
+                logger.info(
+                    "Gemini intento %s/2 iniciado "
+                    "(timeout %.2f s).",
+                    attempt_number,
+                    attempt_timeout,
+                )
+
+                interaction = self.client.interactions.create(
+                    model=self.model,
+                    input=prompt,
+                    response_format={
+                        "type": "text",
+                        "mime_type": "application/json",
+                        "schema": self.RESPONSE_SCHEMA,
+                    },
+                    timeout=attempt_timeout,
+                )
+
+                attempt_elapsed = (
+                    time.perf_counter()
+                    - attempt_started_at
+                )
+
+                logger.info(
+                    "Gemini respondió en intento %s/2 "
+                    "(%.2f s).",
+                    attempt_number,
+                    attempt_elapsed,
+                )
+
+                return interaction
+
+            except Exception as error:
+                if not self._is_retryable_error(error):
+                    raise
+
+                last_error = error
+
+                attempt_elapsed = (
+                    time.perf_counter()
+                    - attempt_started_at
+                )
+
+                logger.warning(
+                    "Gemini intento %s/2 falló de forma "
+                    "transitoria tras %.2f s: %s",
+                    attempt_number,
+                    attempt_elapsed,
+                    error.__class__.__name__,
+                )
+
+        total_elapsed = time.perf_counter() - started_at
+
+        logger.error(
+            "Gemini no respondió correctamente dentro "
+            "del límite total de %.2f s.",
+            total_elapsed,
+        )
+
+        raise TimeoutError(
+            "Gemini no respondió dentro del tiempo máximo configurado."
+        ) from last_error
+
+    def _is_retryable_error(
+        self,
+        error: Exception,
+    ) -> bool:
+        if isinstance(
+            error,
+            (
+                httpx.TimeoutException,
+                httpx.ConnectError,
+            ),
+        ):
+            return True
+
+        status_code = getattr(
+            error,
+            "status_code",
+            None,
+        )
+
+        if status_code is None:
+            status_code = getattr(
+                error,
+                "code",
+                None,
+            )
+
+        if status_code in {
+            408,
+            429,
+            500,
+            502,
+            503,
+            504,
+        }:
+            return True
+
+        retryable_error_names = {
+            "APITimeoutError",
+            "APIConnectionError",
+            "RateLimitError",
+            "InternalServerError",
+            "ServiceUnavailableError",
+        }
+
+        return (
+            error.__class__.__name__
+            in retryable_error_names
+        )
+
     def _build_prompt(
         self,
         message: str,
@@ -236,175 +390,99 @@ class GeminiAIProvider(AIProvider):
         return f"""
 Eres el asistente técnico conversacional de TVTEL.
 
-Tu función principal es conversar de manera natural con técnicos,
-identificar reportes de incidentes, recopilar los datos necesarios
-para registrarlos y responder mensajes generales cuando no se trate
-de una falla.
+Objetivo:
+- Conversar brevemente con técnicos.
+- Detectar reportes de incidentes.
+- Extraer datos explícitos del incidente.
+- Pedir un solo dato faltante por vez.
+- No inventar diagnósticos ni procedimientos.
 
-Debes mantener siempre un tono:
-- Formal.
-- Cordial.
-- Profesional.
-- Claro.
-- Simple.
-- Natural.
-- Breve.
+Tono:
+formal, cordial, profesional, claro, natural y breve.
 
-Evita sonar como un bot rígido.
-No repitas siempre las mismas frases.
-Puedes variar tu vocabulario y la estructura de las respuestas,
-manteniendo siempre un lenguaje sencillo y profesional.
-
-Debes clasificar cada mensaje en una de estas intenciones:
-
-1. incident_report
-   El técnico está comenzando a informar una falla o incidente.
-
-2. incident_followup
-   El técnico está entregando información para completar un
-   incidente que ya estaba en conversación.
-
-3. conversation
-   El mensaje es conversación general, saludo, agradecimiento,
-   comentario, pregunta que no entrega información del incidente,
-   o cualquier mensaje que no deba almacenarse como reporte técnico.
-
-Hay datos anteriores del incidente: {has_previous_data}
+Intenciones:
+- incident_report: inicia un nuevo incidente.
+- incident_followup: completa, corrige o amplía un incidente pendiente.
+- conversation: saludo, agradecimiento o conversación que no aporta
+  información técnica al incidente.
 
 Reglas de conversación:
-- Si el técnico saluda, responde al saludo de forma natural.
-- Si agradece, responde cordialmente.
-- Si realiza conversación general, responde brevemente y con tono
-  profesional.
-- Si pregunta qué puedes hacer, explica brevemente que puedes ayudar
-  a registrar y dar seguimiento a incidentes técnicos.
-- No fuerces una conversación general para convertirla en incidente.
-- Un mensaje de conversación debe usar intent="conversation".
-- Para intent="conversation", utiliza conversation_reply.
-- Para intent="conversation", los campos del incidente deben ser null.
-- Para intent="conversation", clarification_question debe ser null.
+- No conviertas conversación general en incidente.
+- Para conversation usa conversation_reply.
+- Para conversation devuelve unit, equipment, failure_type,
+  description y priority como null.
+- Para conversation clarification_question debe ser null.
 - No inventes información sobre TVTEL.
-- No inventes procedimientos internos, personas, horarios ni políticas.
-- Si no puedes responder algo con seguridad, indícalo de forma breve.
 
-Reglas de incidentes:
-- No inventes información.
+Reglas del incidente:
+- Extrae solo información explícita o directamente observable.
 - No entregues recomendaciones de reparación.
 - No emitas diagnósticos técnicos definitivos.
-- Extrae solamente información explícita o directamente observable
-  en lo dicho por el técnico.
-- El campo failure_type representa el síntoma observable, no una
-  causa técnica inventada.
-- Conserva los datos anteriores cuando el mensaje actual solo
-  responda una pregunta pendiente.
-- Si existe información anterior y el mensaje actual completa,
-  corrige o amplía el incidente, usa intent="incident_followup".
-- Si el técnico claramente inicia una falla nueva, utiliza
-  intent="incident_report".
-- Si un dato realmente no está disponible, devuelve null.
-- La descripción debe conservar el sentido completo de lo reportado.
-- No elimines información válida obtenida anteriormente.
-- Si el técnico corrige explícitamente un dato anterior, utiliza
-  el dato corregido.
+- failure_type es el síntoma observable, no una causa inventada.
+- Conserva datos anteriores válidos.
+- Si el técnico corrige un dato, usa el valor corregido.
+- Si existe un incidente pendiente y el mensaje lo completa,
+  usa incident_followup.
+- Si realmente falta un dato, devuelve null.
 
-Reglas para failure_type:
-- Frases como "no enciende", "no muestra imagen", "sin audio",
-  "pantalla negra", "imagen intermitente", "se reinicia",
-  "no responde", "sin señal" o expresiones equivalentes son
-  síntomas válidos.
-- No devuelvas null en failure_type si el técnico ya explicó
-  claramente el comportamiento anormal.
-- Puedes resumir el síntoma en una frase breve y objetiva.
-- No conviertas síntomas en diagnósticos.
-- Ejemplo válido:
-  "no muestra imagen" -> "No muestra imagen"
-- Ejemplo no válido:
-  "no muestra imagen" -> "Tarjeta de video dañada"
+Prioridad:
+- La prioridad final siempre debe ser confirmada explícitamente
+  por el técnico.
+- Valores permitidos:
+  baja/low -> low
+  media/medium -> medium
+  alta/high -> high
+  crítica/critica/critical -> critical
+- Nunca deduzcas prioridad por el tipo de falla.
+- "urgente", "muy urgente", "importante" y expresiones similares
+  son ambiguas: devuelve priority=null.
+- Nunca uses medium como valor predeterminado.
 
-Reglas de prioridad:
-- critical:
-  incendio, humo, riesgo eléctrico, peligro para personas o
-  emergencia explícita.
-- high:
-  equipo completamente fuera de servicio, no enciende, pérdida
-  total de señal o pérdida completa de su función principal.
-- medium:
-  falla operativa normal sin riesgo inmediato.
-- low:
-  problema menor que permite continuar operando.
-
-Reglas para preguntas de aclaración:
-- Si falta información necesaria para crear el incidente, genera
-  clarification_question.
-- Realiza solo una pregunta a la vez.
-- Pregunta primero por el dato faltante más importante.
-- La pregunta debe ser breve, clara y natural.
-- Mantén un tono formal y cordial.
-- No utilices siempre la misma redacción.
-- No hagas una lista de preguntas.
-- No pidas información que ya fue entregada.
-- Si no falta ningún dato, clarification_question debe ser null.
-
-Los datos necesarios para registrar un incidente son:
+Datos obligatorios para crear el incidente:
 - unit
 - equipment
 - failure_type
 - description
+- priority
 
-Ejemplos de preguntas válidas:
-- "¿Me puedes indicar en qué unidad ocurrió la falla?"
-- "Para completar el reporte, ¿en qué unidad se encuentra el equipo?"
-- "¿Qué equipo está presentando el problema?"
-- "¿Qué comportamiento anormal presenta el equipo?"
-- "¿Puedes describirme brevemente qué ocurrió?"
+Preguntas de aclaración:
+- Pregunta solo un dato a la vez.
+- No pidas información que ya fue entregada.
+- Si falta prioridad, pide explícitamente elegir:
+  Baja, Media, Alta o Crítica.
+- Si no falta ningún dato, clarification_question=null.
 
-Ejemplos conversacionales:
-
-Mensaje:
-"Hola, buenos días"
-
-Resultado esperado:
-intent = "conversation"
-conversation_reply = una respuesta cordial al saludo
-No crear información de incidente.
-
-Mensaje:
-"Gracias"
-
-Resultado esperado:
-intent = "conversation"
-conversation_reply = una respuesta breve y cordial.
-
-Mensaje:
+Ejemplos:
 "Tengo una cámara que no muestra imagen"
+-> incident_report
+-> equipment="Cámara"
+-> failure_type="No muestra imagen"
+-> priority=null
 
-Resultado esperado:
-intent = "incident_report"
-equipment = "Cámara"
-failure_type = "No muestra imagen"
-Preguntar solamente por el siguiente dato necesario.
+"Es en la móvil 8", con incidente pendiente
+-> incident_followup
+-> unit="Móvil 8"
+-> conserva los demás datos.
 
-Mensaje:
-"Es en la móvil 8"
+"Es muy urgente", con incidente pendiente
+-> incident_followup
+-> priority=null
+-> solicita una categoría de prioridad.
 
-Si existe un incidente pendiente:
-intent = "incident_followup"
-unit = "Móvil 8"
-Conservar los demás datos anteriores.
+"Prioridad alta", con incidente pendiente
+-> incident_followup
+-> priority="high"
 
-Mensaje:
 "Un momento, estoy revisando"
+-> conversation
+-> no modifica los datos anteriores.
 
-Resultado esperado:
-intent = "conversation"
-Responder naturalmente.
-No utilizar esa frase como descripción, falla, equipo ni unidad.
-No borrar los datos anteriores del incidente.
+Hay datos anteriores del incidente: {has_previous_data}
 
-Datos anteriores del incidente:
+Datos anteriores:
 {previous_data_json}
 
-Mensaje actual del técnico:
+Mensaje actual:
 {message}
 """.strip()
 
@@ -438,7 +516,7 @@ Mensaje actual del técnico:
 
     def _normalize_priority(self, value):
         if not isinstance(value, str):
-            return "medium"
+            return None
 
         normalized_value = value.strip().lower()
 
@@ -454,10 +532,7 @@ Mensaje actual del técnico:
             "crítica": "critical",
         }
 
-        return priorities.get(
-            normalized_value,
-            "medium",
-        )
+        return priorities.get(normalized_value)
 
     def _build_fallback_question(
         self,
@@ -478,6 +553,10 @@ Mensaje actual del técnico:
             ),
             "description": (
                 "¿Puedes describirme brevemente qué ocurrió?"
+            ),
+            "priority": (
+                "Para completar el reporte, ¿qué prioridad le asignas: "
+                "Baja, Media, Alta o Crítica?"
             ),
         }
 

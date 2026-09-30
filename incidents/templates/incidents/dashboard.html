@@ -483,6 +483,20 @@
             ).trim();
         }
 
+        function getPriorityColor(priority) {
+            const colors = {
+                low: "#15803d",
+                medium: "#ca8a04",
+                high: "#ea580c",
+                critical: "#b91c1c",
+            };
+
+            return (
+                colors[priority]
+                || getCssVariable("--text-secondary")
+            );
+        }
+
         function formatDate(value) {
             if (!value) {
                 return "-";
@@ -1552,9 +1566,16 @@
                             </td>
 
                             <td>
-                                ${escapeHtml(
-                                    incident.priority_display
-                                )}
+                                <span
+                                    style="
+                                        color: ${getPriorityColor(incident.priority)};
+                                        font-weight: 700;
+                                    "
+                                >
+                                    ${escapeHtml(
+                                        incident.priority_display
+                                    )}
+                                </span>
                             </td>
 
                             <td>

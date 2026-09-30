@@ -17,14 +17,40 @@ class IncidentProcessor:
         "equipment",
         "failure_type",
         "description",
+        "priority",
     )
+
+    PENDING_MESSAGES_KEY = "_pending_messages"
 
     FALLBACK_QUESTIONS = {
         "unit": "¿En qué unidad ocurrió la falla?",
         "equipment": "¿Qué equipo presenta la falla?",
         "failure_type": "¿Qué tipo de falla presenta el equipo?",
         "description": "¿Puedes describir con más detalle lo ocurrido?",
+        "priority": (
+            "Para completar el reporte, ¿qué prioridad le asignas: "
+            "Baja, Media, Alta o Crítica?"
+        ),
     }
+
+    PRIORITY_GUIDANCE = (
+        "Para finalizar el reporte necesito que selecciones una prioridad:\n\n"
+        "• Baja: problema menor que permite continuar operando.\n"
+        "• Media: afecta la operación, pero se puede continuar parcial o "
+        "alternativamente.\n"
+        "• Alta: genera un impacto importante o deja el equipo fuera de "
+        "servicio.\n"
+        "• Crítica: existe riesgo para personas, seguridad, operación "
+        "esencial o una contingencia severa.\n\n"
+        "¿Cuál corresponde: Baja, Media, Alta o Crítica?"
+    )
+
+    AI_TIMEOUT_REPLY = (
+        "El procesamiento está tardando más de lo esperado. "
+        "Guardé la información enviada y el reporte sigue pendiente. "
+        "En unos segundos puedes escribir “continuar” o enviar el "
+        "siguiente dato; no es necesario repetir lo anterior."
+    )
 
     def __init__(self, ai_provider=None):
         self.ai_provider = ai_provider or get_ai_provider()
@@ -72,71 +98,152 @@ class IncidentProcessor:
                 "reply": quick_reply,
             }
 
-        previous_data = draft.extracted_data if draft else {}
-
-        extraction = self.ai_provider.extract_incident(
-            message=message.content,
-            previous_data=previous_data,
+        raw_previous_data = (
+            dict(draft.extracted_data or {})
+            if draft
+            else {}
         )
 
-        if extraction.intent == "conversation":
-            reply = (
-                extraction.conversation_reply
-                or "De acuerdo. ¿En qué puedo ayudarte?"
+        pending_messages = self._get_pending_messages(
+            raw_previous_data
+        )
+
+        previous_data = {
+            key: value
+            for key, value in raw_previous_data.items()
+            if key != self.PENDING_MESSAGES_KEY
+        }
+
+        if self._is_waiting_only_for_priority(draft):
+            priority = self._extract_explicit_priority(
+                message.content
             )
 
-            message.status = ChannelMessage.Status.PROCESSED
-            message.processed_at = timezone.now()
-            message.save(
-                update_fields=[
-                    "status",
-                    "processed_at",
-                ]
-            )
+            if priority is None:
+                draft.last_question = self.PRIORITY_GUIDANCE
+                draft.status = IncidentDraft.Status.COLLECTING
+                draft.save(
+                    update_fields=[
+                        "last_question",
+                        "status",
+                        "updated_at",
+                    ]
+                )
 
-            return {
-                "action": "conversation",
-                "incident_created": False,
-                "draft_id": draft.pk if draft else None,
-                "reply": reply,
+                message.draft = draft
+                message.status = ChannelMessage.Status.PROCESSED
+                message.processed_at = timezone.now()
+                message.save(
+                    update_fields=[
+                        "draft",
+                        "status",
+                        "processed_at",
+                    ]
+                )
+
+                return {
+                    "action": "ask_clarification",
+                    "incident_created": False,
+                    "draft_id": draft.pk,
+                    "missing_fields": ["priority"],
+                    "reply": self.PRIORITY_GUIDANCE,
+                    "extracted_data": previous_data,
+                }
+
+            extracted_data = {
+                "unit": previous_data.get("unit"),
+                "equipment": previous_data.get("equipment"),
+                "failure_type": previous_data.get("failure_type"),
+                "description": previous_data.get("description"),
+                "priority": priority,
             }
 
-        extracted_data = {
-            "unit": extraction.unit or previous_data.get("unit"),
-            "equipment": (
-                extraction.equipment
-                or previous_data.get("equipment")
-            ),
-            "failure_type": (
-                extraction.failure_type
-                or previous_data.get("failure_type")
-            ),
-            "description": (
-                extraction.description
-                or previous_data.get("description")
-            ),
-            "priority": (
-                extraction.priority
-                or previous_data.get("priority")
-                or Incident.Priority.MEDIUM
-            ),
-        }
+            clarification_question = None
+
+        else:
+            ai_message = self._build_ai_message(
+                current_message=message.content,
+                pending_messages=pending_messages,
+            )
+
+            try:
+                extraction = self.ai_provider.extract_incident(
+                    message=ai_message,
+                    previous_data=previous_data,
+                )
+            except TimeoutError:
+                return self._handle_ai_timeout(
+                    message=message,
+                    draft=draft,
+                    previous_data=previous_data,
+                    pending_messages=pending_messages,
+                )
+
+            if extraction.intent == "conversation":
+                reply = (
+                    extraction.conversation_reply
+                    or "De acuerdo. ¿En qué puedo ayudarte?"
+                )
+
+                message.status = ChannelMessage.Status.PROCESSED
+                message.processed_at = timezone.now()
+                message.save(
+                    update_fields=[
+                        "status",
+                        "processed_at",
+                    ]
+                )
+
+                return {
+                    "action": "conversation",
+                    "incident_created": False,
+                    "draft_id": draft.pk if draft else None,
+                    "reply": reply,
+                }
+
+            extracted_data = {
+                "unit": (
+                    extraction.unit
+                    or previous_data.get("unit")
+                ),
+                "equipment": (
+                    extraction.equipment
+                    or previous_data.get("equipment")
+                ),
+                "failure_type": (
+                    extraction.failure_type
+                    or previous_data.get("failure_type")
+                ),
+                "description": (
+                    extraction.description
+                    or previous_data.get("description")
+                ),
+                "priority": (
+                    extraction.priority
+                    or previous_data.get("priority")
+                ),
+            }
+
+            clarification_question = (
+                extraction.clarification_question
+            )
 
         valid_priorities = {
             choice[0]
             for choice in Incident.Priority.choices
         }
 
-        if extracted_data["priority"] not in valid_priorities:
-            extracted_data["priority"] = Incident.Priority.MEDIUM
+        if (
+            extracted_data["priority"] is not None
+            and extracted_data["priority"] not in valid_priorities
+        ):
+            extracted_data["priority"] = None
 
         missing_fields = [
             field_name
             for field_name in self.REQUIRED_FIELDS
             if not extracted_data.get(field_name)
         ]
-
-        clarification_question = extraction.clarification_question
 
         if missing_fields and not clarification_question:
             clarification_question = self.FALLBACK_QUESTIONS[
@@ -257,6 +364,185 @@ class IncidentProcessor:
             ),
             "extracted_data": extracted_data,
         }
+
+    def _handle_ai_timeout(
+        self,
+        message: ChannelMessage,
+        draft: IncidentDraft | None,
+        previous_data: dict,
+        pending_messages: list[str],
+    ):
+        saved_pending_messages = list(pending_messages)
+
+        if self._should_store_pending_message(message.content):
+            saved_pending_messages.append(
+                message.content.strip()
+            )
+
+        timeout_data = dict(previous_data)
+        timeout_data[self.PENDING_MESSAGES_KEY] = (
+            saved_pending_messages
+        )
+
+        missing_fields = [
+            field_name
+            for field_name in self.REQUIRED_FIELDS
+            if not previous_data.get(field_name)
+        ]
+
+        if draft is None:
+            draft = IncidentDraft.objects.create(
+                technician=message.technician,
+                initial_message=message,
+                extracted_data=timeout_data,
+                missing_fields=missing_fields,
+                last_question=self.AI_TIMEOUT_REPLY,
+                status=IncidentDraft.Status.COLLECTING,
+            )
+        else:
+            draft.extracted_data = timeout_data
+            draft.missing_fields = missing_fields
+            draft.last_question = self.AI_TIMEOUT_REPLY
+            draft.status = IncidentDraft.Status.COLLECTING
+            draft.save(
+                update_fields=[
+                    "extracted_data",
+                    "missing_fields",
+                    "last_question",
+                    "status",
+                    "updated_at",
+                ]
+            )
+
+        message.draft = draft
+        message.status = ChannelMessage.Status.PROCESSED
+        message.processed_at = timezone.now()
+        message.save(
+            update_fields=[
+                "draft",
+                "status",
+                "processed_at",
+            ]
+        )
+
+        return {
+            "action": "ai_timeout",
+            "incident_created": False,
+            "draft_id": draft.pk,
+            "missing_fields": missing_fields,
+            "reply": self.AI_TIMEOUT_REPLY,
+            "extracted_data": previous_data,
+        }
+
+    def _get_pending_messages(
+        self,
+        extracted_data: dict,
+    ) -> list[str]:
+        pending_messages = extracted_data.get(
+            self.PENDING_MESSAGES_KEY,
+            [],
+        )
+
+        if not isinstance(pending_messages, list):
+            return []
+
+        return [
+            item.strip()
+            for item in pending_messages
+            if isinstance(item, str) and item.strip()
+        ]
+
+    def _build_ai_message(
+        self,
+        current_message: str,
+        pending_messages: list[str],
+    ) -> str:
+        if not pending_messages:
+            return current_message
+
+        normalized_current = self._normalize_quick_text(
+            current_message
+        )
+
+        if normalized_current in {
+            "continuar",
+            "continua",
+            "continuemos",
+            "seguir",
+            "sigamos",
+        }:
+            return "\n".join(pending_messages)
+
+        pending_text = "\n".join(
+            f"- {pending_message}"
+            for pending_message in pending_messages
+        )
+
+        return (
+            "Mensajes anteriores del técnico que quedaron "
+            "pendientes de procesamiento:\n"
+            f"{pending_text}\n\n"
+            "Mensaje actual del técnico:\n"
+            f"{current_message}"
+        )
+
+    def _should_store_pending_message(
+        self,
+        text: str,
+    ) -> bool:
+        normalized_text = self._normalize_quick_text(text)
+
+        return normalized_text not in {
+            "continuar",
+            "continua",
+            "continuemos",
+            "seguir",
+            "sigamos",
+        }
+
+    def _is_waiting_only_for_priority(
+        self,
+        draft: IncidentDraft | None,
+    ) -> bool:
+        if draft is None:
+            return False
+
+        missing_fields = draft.missing_fields or []
+
+        return (
+            len(missing_fields) == 1
+            and missing_fields[0] == "priority"
+        )
+
+    def _extract_explicit_priority(
+        self,
+        text: str,
+    ) -> str | None:
+        normalized_text = self._normalize_quick_text(text)
+
+        priority_words = {
+            "baja": Incident.Priority.LOW,
+            "low": Incident.Priority.LOW,
+            "media": Incident.Priority.MEDIUM,
+            "medium": Incident.Priority.MEDIUM,
+            "alta": Incident.Priority.HIGH,
+            "high": Incident.Priority.HIGH,
+            "critica": Incident.Priority.CRITICAL,
+            "critical": Incident.Priority.CRITICAL,
+        }
+
+        words = normalized_text.split()
+
+        detected_priorities = {
+            priority_words[word]
+            for word in words
+            if word in priority_words
+        }
+
+        if len(detected_priorities) != 1:
+            return None
+
+        return detected_priorities.pop()
 
     def _normalize_quick_text(self, text: str) -> str:
         normalized_text = text.strip().lower()

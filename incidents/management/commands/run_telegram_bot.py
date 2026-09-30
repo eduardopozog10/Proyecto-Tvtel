@@ -1,8 +1,10 @@
+import threading
 import time
 
 import httpx
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
+from django.db import close_old_connections
 
 from incidents.messaging.telegram_update_handler import (
     TelegramUpdateHandler,
@@ -14,6 +16,8 @@ class Command(BaseCommand):
         "Ejecuta el bot de Telegram mediante long polling "
         "para desarrollo local."
     )
+
+    PROCESSING_NOTICE_SECONDS = 20.0
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -91,9 +95,23 @@ class Command(BaseCommand):
 
                         started_at = time.perf_counter()
 
+                        processing_notice_timer = threading.Timer(
+                            self.PROCESSING_NOTICE_SECONDS,
+                            self._send_processing_notice,
+                            kwargs={
+                                "handler": handler,
+                                "update": update,
+                            },
+                        )
+
+                        processing_notice_timer.daemon = True
+                        processing_notice_timer.start()
+
                         try:
                             result = handler.handle(update)
                         except Exception as error:
+                            processing_notice_timer.cancel()
+
                             elapsed = (
                                 time.perf_counter()
                                 - started_at
@@ -108,6 +126,8 @@ class Command(BaseCommand):
                                 )
                             )
                             continue
+                        finally:
+                            processing_notice_timer.cancel()
 
                         elapsed = (
                             time.perf_counter()
@@ -132,6 +152,42 @@ class Command(BaseCommand):
                     "Bot de Telegram detenido."
                 )
             )
+
+    def _send_processing_notice(
+        self,
+        *,
+        handler: TelegramUpdateHandler,
+        update: dict,
+    ):
+        close_old_connections()
+
+        try:
+            result = handler.send_processing_notice(
+                update
+            )
+
+            action = result.get(
+                "action",
+                "processing_notice_unknown",
+            )
+
+            if action == "processing_notice_sent":
+                self.stdout.write(
+                    self.style.WARNING(
+                        "Aviso de procesamiento enviado "
+                        f"tras {self.PROCESSING_NOTICE_SECONDS:.0f} s."
+                    )
+                )
+
+        except Exception as error:
+            self.stderr.write(
+                self.style.WARNING(
+                    "No fue posible enviar el aviso de "
+                    f"procesamiento: {error}"
+                )
+            )
+        finally:
+            close_old_connections()
 
     def _get_updates(
         self,

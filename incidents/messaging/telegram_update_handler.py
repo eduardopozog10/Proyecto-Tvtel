@@ -14,6 +14,12 @@ from incidents.services.incoming_message_service import (
 class TelegramUpdateHandler:
     PROVIDER = "telegram"
 
+    PROCESSING_NOTICE = (
+        "El procesamiento está tomando un poco más de lo habitual. "
+        "Sigo procesando tu mensaje; no es necesario que lo envíes "
+        "nuevamente."
+    )
+
     def __init__(
         self,
         messaging_provider=None,
@@ -179,6 +185,105 @@ class TelegramUpdateHandler:
             "incident_created": processing_result[
                 "incident_created"
             ],
+        }
+
+    def send_processing_notice(
+        self,
+        update: dict,
+    ) -> dict:
+        telegram_message = update.get("message")
+
+        if telegram_message is None:
+            return {
+                "action": "processing_notice_ignored",
+            }
+
+        chat = telegram_message.get("chat", {})
+
+        external_chat_id = str(
+            chat.get("id", "")
+        ).strip()
+
+        telegram_message_id = telegram_message.get(
+            "message_id"
+        )
+
+        text = telegram_message.get("text")
+
+        if (
+            not external_chat_id
+            or telegram_message_id is None
+            or not isinstance(text, str)
+            or not text.strip()
+            or text in {"/start", "/cancelar"}
+        ):
+            return {
+                "action": "processing_notice_ignored",
+            }
+
+        external_message_id = (
+            f"{external_chat_id}:{telegram_message_id}"
+        )
+
+        incoming_message = (
+            ChannelMessage.objects.select_related(
+                "channel_account",
+                "technician",
+                "incident",
+                "draft",
+            )
+            .filter(
+                provider=self.PROVIDER,
+                external_message_id=external_message_id,
+                direction=ChannelMessage.Direction.INBOUND,
+            )
+            .first()
+        )
+
+        if incoming_message is None:
+            return {
+                "action": "processing_notice_ignored",
+            }
+
+        if incoming_message.status in {
+            ChannelMessage.Status.PROCESSED,
+            ChannelMessage.Status.FAILED,
+        }:
+            return {
+                "action": "processing_notice_ignored",
+            }
+
+        reply_text = self.PROCESSING_NOTICE
+
+        try:
+            telegram_response = (
+                self.messaging_provider.send_text(
+                    external_chat_id,
+                    reply_text,
+                )
+            )
+        except Exception as error:
+            self._record_failed_reply(
+                incoming_message=incoming_message,
+                reply_text=reply_text,
+                error=error,
+            )
+
+            return {
+                "action": "processing_notice_failed",
+                "message_id": incoming_message.pk,
+            }
+
+        outgoing_message = self._record_sent_reply(
+            incoming_message=incoming_message,
+            reply_text=reply_text,
+            telegram_response=telegram_response,
+        )
+
+        return {
+            "action": "processing_notice_sent",
+            "incoming_message_id": incoming_message.pk,
+            "outgoing_message_id": outgoing_message.pk,
         }
 
     def _handle_cancel_command(
