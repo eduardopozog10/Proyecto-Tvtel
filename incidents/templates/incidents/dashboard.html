@@ -497,6 +497,22 @@
             );
         }
 
+        function getStatusColor(status) {
+            const colors = {
+                reported: "#0284c7",
+                under_review: "#7c3aed",
+                in_progress: "#d97706",
+                resolved: "#15803d",
+                closed: "#64748b",
+                cancelled: "#b91c1c",
+            };
+
+            return (
+                colors[status]
+                || getCssVariable("--text-secondary")
+            );
+        }
+
         function formatDate(value) {
             if (!value) {
                 return "-";
@@ -1579,9 +1595,16 @@
                             </td>
 
                             <td>
-                                ${escapeHtml(
-                                    incident.status_display
-                                )}
+                                <span
+                                    style="
+                                        color: ${getStatusColor(incident.status)};
+                                        font-weight: 700;
+                                    "
+                                >
+                                    ${escapeHtml(
+                                        incident.status_display
+                                    )}
+                                </span>
                             </td>
 
                             <td>
@@ -1672,16 +1695,30 @@
 
                     <p>
                         <strong>Prioridad:</strong>
-                        ${escapeHtml(
-                            incident.priority_display
-                        )}
+                        <span
+                            style="
+                                color: ${getPriorityColor(incident.priority)};
+                                font-weight: 700;
+                            "
+                        >
+                            ${escapeHtml(
+                                incident.priority_display
+                            )}
+                        </span>
                     </p>
 
                     <p>
                         <strong>Estado:</strong>
-                        ${escapeHtml(
-                            incident.status_display
-                        )}
+                        <span
+                            style="
+                                color: ${getStatusColor(incident.status)};
+                                font-weight: 700;
+                            "
+                        >
+                            ${escapeHtml(
+                                incident.status_display
+                            )}
+                        </span>
                     </p>
 
                     <p>
