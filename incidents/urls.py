@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    IncidentAnalyticsView,
     IncidentDetailView,
     IncidentListView,
     IncidentSummaryView,
@@ -21,6 +22,11 @@ urlpatterns = [
         "incidents/summary/",
         IncidentSummaryView.as_view(),
         name="incident-summary",
+    ),
+    path(
+        "incidents/analytics/",
+        IncidentAnalyticsView.as_view(),
+        name="incident-analytics",
     ),
     path(
         "incidents/<int:pk>/",

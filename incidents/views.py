@@ -1,5 +1,16 @@
-from django.db.models import Count, Q
+from datetime import timedelta
+
+from django.db.models import (
+    Avg,
+    Count,
+    DurationField,
+    ExpressionWrapper,
+    F,
+    Q,
+)
+from django.db.models.functions import TruncDate
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -20,6 +31,39 @@ from incidents.services.incoming_message_service import (
 )
 
 
+def filter_queryset_by_date_range(queryset, request):
+    date_from_value = request.query_params.get(
+        "date_from"
+    )
+    date_to_value = request.query_params.get(
+        "date_to"
+    )
+
+    date_from = (
+        parse_date(date_from_value)
+        if date_from_value
+        else None
+    )
+
+    date_to = (
+        parse_date(date_to_value)
+        if date_to_value
+        else None
+    )
+
+    if date_from:
+        queryset = queryset.filter(
+            created_at__date__gte=date_from,
+        )
+
+    if date_to:
+        queryset = queryset.filter(
+            created_at__date__lte=date_to,
+        )
+
+    return queryset
+
+
 class IncidentListView(generics.ListAPIView):
     permission_classes = [AllowAny]
     serializer_class = IncidentSerializer
@@ -36,6 +80,11 @@ class IncidentListView(generics.ListAPIView):
     def get_queryset(self):
         queryset = Incident.objects.select_related(
             "technician"
+        )
+
+        queryset = filter_queryset_by_date_range(
+            queryset,
+            self.request,
         )
 
         status_value = self.request.query_params.get(
@@ -102,7 +151,14 @@ class IncidentSummaryView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        summary = Incident.objects.aggregate(
+        queryset = Incident.objects.all()
+
+        queryset = filter_queryset_by_date_range(
+            queryset,
+            request,
+        )
+
+        summary = queryset.aggregate(
             total=Count("id"),
             reported=Count(
                 "id",
@@ -187,6 +243,217 @@ class IncidentSummaryView(APIView):
                     "high": summary["high"],
                     "critical": summary["critical"],
                 },
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class IncidentAnalyticsView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        queryset = Incident.objects.all()
+
+        queryset = filter_queryset_by_date_range(
+            queryset,
+            request,
+        )
+
+        open_statuses = [
+            Incident.Status.REPORTED,
+            Incident.Status.UNDER_REVIEW,
+            Incident.Status.IN_PROGRESS,
+        ]
+
+        resolution_duration = ExpressionWrapper(
+            F("resolved_at") - F("created_at"),
+            output_field=DurationField(),
+        )
+
+        metrics = queryset.aggregate(
+            total=Count("id"),
+            open=Count(
+                "id",
+                filter=Q(
+                    status__in=open_statuses
+                ),
+            ),
+            resolved=Count(
+                "id",
+                filter=Q(
+                    status=Incident.Status.RESOLVED
+                ),
+            ),
+            critical=Count(
+                "id",
+                filter=Q(
+                    priority=Incident.Priority.CRITICAL
+                ),
+            ),
+            critical_open=Count(
+                "id",
+                filter=Q(
+                    priority=Incident.Priority.CRITICAL,
+                    status__in=open_statuses,
+                ),
+            ),
+            average_resolution=Avg(
+                resolution_duration,
+                filter=Q(
+                    resolved_at__isnull=False
+                ),
+            ),
+        )
+
+        average_resolution = metrics[
+            "average_resolution"
+        ]
+
+        average_resolution_seconds = None
+
+        if average_resolution is not None:
+            average_resolution_seconds = int(
+                average_resolution.total_seconds()
+            )
+
+        older_than_24_hours = queryset.filter(
+            status__in=open_statuses,
+            created_at__lt=(
+                timezone.now()
+                - timedelta(hours=24)
+            ),
+        ).count()
+
+        by_status = queryset.values(
+            "status"
+        ).annotate(
+            count=Count("id")
+        ).order_by(
+            "-count"
+        )
+
+        by_priority = queryset.values(
+            "priority"
+        ).annotate(
+            count=Count("id")
+        ).order_by(
+            "-count"
+        )
+
+        by_equipment = queryset.exclude(
+            equipment=""
+        ).values(
+            "equipment"
+        ).annotate(
+            count=Count("id")
+        ).order_by(
+            "-count",
+            "equipment",
+        )[:10]
+
+        by_unit = queryset.exclude(
+            unit=""
+        ).values(
+            "unit"
+        ).annotate(
+            count=Count("id")
+        ).order_by(
+            "-count",
+            "unit",
+        )[:10]
+
+        daily_trend = queryset.annotate(
+            day=TruncDate("created_at")
+        ).values(
+            "day"
+        ).annotate(
+            count=Count("id")
+        ).order_by(
+            "day"
+        )
+
+        status_labels = dict(
+            Incident.Status.choices
+        )
+
+        priority_labels = dict(
+            Incident.Priority.choices
+        )
+
+        status_data = [
+            {
+                "value": item["status"],
+                "label": status_labels.get(
+                    item["status"],
+                    item["status"],
+                ),
+                "count": item["count"],
+            }
+            for item in by_status
+        ]
+
+        priority_data = [
+            {
+                "value": item["priority"],
+                "label": priority_labels.get(
+                    item["priority"],
+                    item["priority"],
+                ),
+                "count": item["count"],
+            }
+            for item in by_priority
+        ]
+
+        equipment_data = [
+            {
+                "equipment": item["equipment"],
+                "count": item["count"],
+            }
+            for item in by_equipment
+        ]
+
+        unit_data = [
+            {
+                "unit": item["unit"],
+                "count": item["count"],
+            }
+            for item in by_unit
+        ]
+
+        trend_data = [
+            {
+                "date": (
+                    item["day"].isoformat()
+                    if item["day"]
+                    else None
+                ),
+                "count": item["count"],
+            }
+            for item in daily_trend
+        ]
+
+        return Response(
+            {
+                "metrics": {
+                    "total": metrics["total"],
+                    "open": metrics["open"],
+                    "resolved": metrics["resolved"],
+                    "critical": metrics["critical"],
+                    "critical_open": metrics[
+                        "critical_open"
+                    ],
+                    "average_resolution_seconds": (
+                        average_resolution_seconds
+                    ),
+                    "open_over_24_hours": (
+                        older_than_24_hours
+                    ),
+                },
+                "by_status": status_data,
+                "by_priority": priority_data,
+                "by_equipment": equipment_data,
+                "by_unit": unit_data,
+                "daily_trend": trend_data,
             },
             status=status.HTTP_200_OK,
         )
